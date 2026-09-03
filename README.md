@@ -1,0 +1,2 @@
+# Turubiskaala
+Waa ciyaarta iskaalada 
