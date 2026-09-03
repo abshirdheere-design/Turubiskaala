@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.cache/
+.env
+.env.*
+data/sessions.json
+data/profiles.json
+data/profiles.backup.json
