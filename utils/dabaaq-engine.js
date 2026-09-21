@@ -294,7 +294,12 @@ export function applyCorrectDabaaqScores({
             console.log('🔴 NEGATIVE DABAAQ FIXED:', {
                 winner: winnerName,
                 other: otherName,
-                winnerResult: winnerAfter
+                winnerBefore,
+                otherBefore,
+                winnerResult: winnerAfter,
+                otherResult: netOf(scores[otherKey]),
+                fooroTarget: victimName || null,
+                dabaaqAmount
             });
         }
 
@@ -371,11 +376,17 @@ export function applyCorrectDabaaqScores({
         displayName: winner.displayName || winnerName
     };
 
-    const balanceFix = positiveDabaaqApplied
-        ? null
-        : rebalanceScoreMap(scores, winnerName);
-    if (balanceFix) {
-        console.log('⚖️ SESSION SCORE BALANCED:', balanceFix);
+    /*
+     * Ha dib-u-miisaamin score-yada kadib transaction-ka. Dabaaq iyo Fooro
+     * waxay leeyihiin dhinacyo la yaqaan; rebalance guud wuxuu qarin karaa
+     * cidda dhibicda laga jaray ama loo gudbiyay.
+     */
+    const finalScoreTotal = Object.values(scores).reduce(
+        (sum, score) => sum + netOf(score),
+        0
+    );
+    if (finalScoreTotal !== 0) {
+        console.warn('⚠️ SESSION SCORE TOTAL AFTER DABAAQ:', finalScoreTotal);
     }
 
     Object.keys(deltas).forEach(key => delete deltas[key]);

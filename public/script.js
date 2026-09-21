@@ -20,11 +20,15 @@ let myOpeningScore = 0;
 let barrierHistory = [101];
 let turnTimeLeft = 30;
 let turnTimerInterval = null;
+let lastTurnStartTime = 0;
 let dragStartIndex = null;
 let waitingAutoTimer = null;
 let waitingCountdown = 10;
 let inGame = false;
 let lastPickedDiscardId = null;
+let currentRoomNumber = null;
+let onlineUsers = [];
+let publicClientIpPromise = null;
 
 // ─── Xiili (Season) Fooro Tracking ────────────────────────────────────────────
 let sessionFooros = {};   // fallback: { playerName: { fooros, wins } }
@@ -44,6 +48,10 @@ const SESSION_KEY = 't101_token';
 const PROFILE_KEY = 't101_profile';
 const SCORES_KEY  = 't101_sessionScores';
 const TARGET_KEY  = 't101_xiiliTarget';
+const PENDING_RESUME_KEY = 't101_pendingResume';
+let pendingResumeRequested = false;
+let pendingNextGame = false;
+let socketRoomReady = false;
 
 function escapeHistoryHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -164,6 +172,60 @@ function clearSessionScores() {
     localStorage.removeItem(TARGET_KEY);
   } catch (e) {}
 }
+
+function savePendingResume() {
+  try {
+    const token = sessionStorage.getItem(SESSION_KEY);
+    if (!token || !myName) return false;
+    localStorage.setItem(PENDING_RESUME_KEY, JSON.stringify({
+      name: myName,
+      token,
+      xiiliTarget,
+      savedAt: Date.now(),
+    }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function getPendingResume(name = '') {
+  try {
+    const raw = localStorage.getItem(PENDING_RESUME_KEY);
+    if (!raw) return null;
+    const pending = JSON.parse(raw);
+    const isExpired = !pending?.savedAt || Date.now() - pending.savedAt > 24 * 60 * 60 * 1000;
+    const nameMatches = !name || normalizeName(pending.name) === normalizeName(name);
+    if (isExpired || !pending.token || !pending.name || !nameMatches) {
+      if (isExpired) localStorage.removeItem(PENDING_RESUME_KEY);
+      return null;
+    }
+    return pending;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearPendingResume() {
+  try { localStorage.removeItem(PENDING_RESUME_KEY); } catch (e) {}
+}
+
+/*
+ * Browser-ku haddii uu xirmo iyadoo ciyaartu weli socoto, gameOver event
+ * ma dhici karo. Sidaas darteed token-ka room-ka ku kaydi localStorage
+ * marka page-ku baxayo, si qofku ugu soo laabto isla room/session-ka.
+ *
+ * Ka bixitaan ula kac ah (Ka bax / Xilli Cusub) wuxuu marka hore dejinayaa
+ * window.t101SkipResumeSave si uusan room-kii hore dib loogu soo celin.
+ */
+function saveResumeBeforePageExit() {
+  if (window.t101SkipResumeSave) return;
+  if (!myName || !sessionStorage.getItem(SESSION_KEY)) return;
+  savePendingResume();
+}
+
+window.addEventListener('pagehide', saveResumeBeforePageExit);
+window.addEventListener('beforeunload', saveResumeBeforePageExit);
 
 function normalizeName(name) {
   return String(name || '').trim().toUpperCase();
@@ -366,6 +428,26 @@ const POINT_VALUES = {
 
 function $(id) { return document.getElementById(id); }
 
+function renderRoomLabel(roomNumber) {
+  const number = Number(roomNumber);
+  if (!Number.isInteger(number) || number < 1) return;
+
+  currentRoomNumber = number;
+
+  const fullLabel = `Qolka ${number}aad`;
+
+  const waitingLabel = $('waiting-room-label');
+  const headerLabel = $('hdr-room-label');
+
+  if (waitingLabel) {
+    waitingLabel.textContent = fullLabel;
+  }
+
+  if (headerLabel) {
+    headerLabel.textContent = fullLabel;
+  }
+}
+
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = $(`${name}-screen`);
@@ -468,6 +550,78 @@ function showNotification(msg, duration = 4000) {
   el.dataset.timer = timer;
 }
 
+function countryFlagEmoji(countryCode) {
+  const code = String(countryCode || 'XX').toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code) || code === 'XX') return '🌐';
+  return [...code]
+    .map(letter => String.fromCodePoint(127397 + letter.charCodeAt(0)))
+    .join('');
+}
+
+function getPublicClientIp() {
+  if (!publicClientIpPromise) {
+    publicClientIpPromise = fetch('https://api64.ipify.org?format=json', {
+      cache: 'no-store',
+    })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => typeof data?.ip === 'string' ? data.ip.trim() : '')
+      .catch(() => '');
+  }
+  return publicClientIpPromise;
+}
+
+function announceOnlineProfile(profile = myProfileData) {
+  const name = String(profile?.name || '').trim();
+  if (!name || !socket?.connected) return;
+
+  getPublicClientIp().then(publicIp => {
+    if (!socket?.connected) return;
+    const data = { name };
+    if (publicIp) data.publicIp = publicIp;
+    socket.emit('setOnlineProfile', data);
+  });
+}
+
+function renderOnlineUsers(data = {}) {
+  const countEl = $('hdr-online-count');
+  const totalEl = $('hdr-online-total');
+  const listEl = $('hdr-online-list');
+  const users = Array.isArray(data.users)
+    ? data.users.filter(user => user && user.name)
+    : [];
+
+  onlineUsers = users;
+  const count = Number.isFinite(Number(data.count)) ? Number(data.count) : users.length;
+  if (countEl) countEl.textContent = `${count} online`;
+  if (totalEl) totalEl.textContent = String(count);
+  if (!listEl) return;
+
+  listEl.innerHTML = users.length
+    ? users.map(user => {
+        const country = String(user.country || 'XX').toUpperCase();
+        const countryLabel = country === 'XX' ? '' : ` (${escapeHistoryHtml(country)})`;
+        return `
+        <div class="hdr-online-row">
+          <span class="online-dot">●</span>
+          <span>${escapeHistoryHtml(user.name)}</span>
+          <span class="online-country">${countryFlagEmoji(country)}${countryLabel}</span>
+        </div>
+      `;
+      }).join('')
+    : '<div class="hdr-online-empty">Qof online ah ma jiro.</div>';
+}
+
+function toggleOnlineUsers(forceOpen) {
+  const popover = $('hdr-online-popover');
+  const toggle = $('hdr-online-toggle');
+  if (!popover || !toggle) return;
+  const shouldOpen = typeof forceOpen === 'boolean'
+    ? forceOpen
+    : popover.classList.contains('hidden');
+  popover.classList.toggle('hidden', !shouldOpen);
+  toggle.setAttribute('aria-expanded', String(shouldOpen));
+}
+
 function distributeAllCardsAnimated(myCards, opponentCounts, onDone) {
   const container = $('table-area');
   const handContainer = $('hand-cards');
@@ -518,14 +672,25 @@ function distributeAllCardsAnimated(myCards, opponentCounts, onDone) {
   });
 }
 
-function startTurnTimer() {
+function startTurnTimer(serverTurnStartTime = 0) {
   clearInterval(turnTimerInterval);
-  turnTimeLeft = 30;
-  renderHeader();
-  turnTimerInterval = setInterval(() => {
-    turnTimeLeft = Math.max(0, turnTimeLeft - 1);
+  const startedAt = Number(serverTurnStartTime) || 0;
+  lastTurnStartTime = startedAt;
+  const updateTime = () => {
+    turnTimeLeft = startedAt
+      ? Math.max(0, 30 - Math.floor((Date.now() - startedAt) / 1000))
+      : Math.max(0, turnTimeLeft - 1);
     renderHeader();
     if (turnTimeLeft === 0) clearInterval(turnTimerInterval);
+  };
+  if (startedAt) updateTime();
+  else {
+    turnTimeLeft = 30;
+    renderHeader();
+  }
+  if (turnTimeLeft === 0) return;
+  turnTimerInterval = setInterval(() => {
+    updateTime();
   }, 1000);
 }
 
@@ -987,7 +1152,6 @@ function makeDraggableSet(set, setIdx, targetPlayerId) {
     renderHand();
     if (socket) {
       socket.emit('addToExistingSets', { cards: [draggedCard] });
-      socket.emit('syncHandAfterMeld', myHand);
     }
     showNotification('✅ Kaartu miiska ayay u gashay!', 1500);
   });
@@ -1177,6 +1341,10 @@ function handlePickDiscard() {
 
 function handleDhigo() {
   if (!isMyTurn) { showNotification('Sug doorkaaga!'); return; }
+  if (!hasDrawn) {
+    showNotification('❌ Marka hore kaar ka qaado xabadka ama tuurista, kadib ayaad degi kartaa.');
+    return;
+  }
   const selected = myHand.filter(c => c.selected);
   if (selected.length === 0) { showNotification('Fadlan dooro kaarka aad dhigayso!'); return; }
   if (pickedFromDiscard && !selected.some(card => card.id === lastPickedDiscardId)) {
@@ -1206,7 +1374,6 @@ function handleDhigo() {
       myHand = myHand.filter(c => !selectedIds.has(c.id)).map(c => ({ ...c, selected: false }));
       if (socket) {
         socket.emit('addToExistingSets', { cards: validAdditions });
-        socket.emit('syncHandAfterMeld', myHand);
       }
       if (invalidCards.length > 0) showNotification(`Waxaad ku darsatay ${validAdditions.length} kaar, laakiin kaarka ${invalidCards[0].value}${invalidCards[0].suit} ma geli karo miiska!`);
       else showNotification(`Waad ku darsatay miiska ${validAdditions.length} kaar!`);
@@ -1248,7 +1415,6 @@ function handleDhigo() {
       myHand = [];
       if (socket) {
         socket.emit('meldSets', { sets: allSetsSoFar, totalScore: currentTotal, isAdditional: false });
-        socket.emit('syncHandAfterMeld', myHand);
         // Halkan waxaa la waci karaa ama la diri karaa dhacdada xiritaanka ciyaarta (endGame)
       }
       showNotification(`🎉 Hambalyo! Waxaad si guul leh ku wada xirtay gacantaada!`);
@@ -1268,7 +1434,6 @@ function handleDhigo() {
       myHand = myHand.filter(c => !selectedIds.has(c.id)).map(c => ({ ...c, selected: false }));
       if (socket) {
         socket.emit('meldSets', { sets: allSetsSoFar, totalScore: currentTotal, isAdditional: false });
-        socket.emit('syncHandAfterMeld', myHand);
       }
       temporaryScore = 0;
       showNotification(`Waad degtay! ${currentTotal} dhibco.`);
@@ -1279,7 +1444,6 @@ function handleDhigo() {
       myOpenedSets = [...myOpenedSets, ...processedGroups];
       const selectedIds = new Set(selected.map(c => c.id));
       myHand = myHand.filter(c => !selectedIds.has(c.id)).map(c => ({ ...c, selected: false }));
-      if (socket) socket.emit('syncHandAfterMeld', myHand);
       showNotification(`Wadarta: ${temporaryScore}. U baahan: ${effectiveMin}`);
     }
   } else {
@@ -1287,7 +1451,6 @@ function handleDhigo() {
     myHand = myHand.filter(c => !selectedIds.has(c.id)).map(c => ({ ...c, selected: false }));
     if (socket) {
       socket.emit('meldSets', { sets: processedGroups, isAdditional: true });
-      socket.emit('syncHandAfterMeld', myHand);
     }
     myOpenedSets = [...myOpenedSets, ...processedGroups];
   }
@@ -1329,7 +1492,6 @@ function handleTuur() {
           // Si toos ah ugu dar miiska
           if (socket) {
             socket.emit('addToExistingSets', { cards: [pickedCard] });
-            socket.emit('syncHandAfterMeld', myHand);
           }
           
           // Ka saar gacanta kaarkii la isticmaalay
@@ -1431,24 +1593,34 @@ function renderWaitingRoom(plist) {
   if (humanCount >= 2 || plist.length >= 4) { stopWaitingCountdown(); const noteEl = $('waiting-auto-note'); if (noteEl) noteEl.textContent = ''; }
 }
 
-function joinGame() {
+async function joinGame() {
   const nameInput = $('name-input');
   const name = nameInput ? nameInput.value.trim() : '';
   if (!name) { showNotification('Fadlan geli magacaaga!'); return; }
+  const pendingResume = getPendingResume(name);
   myName = name;
   inGame = false;
   players = [];
-  sessionStorage.removeItem(SESSION_KEY);
+  pendingResumeRequested = Boolean(pendingResume);
+  if (pendingResume) sessionStorage.setItem(SESSION_KEY, pendingResume.token);
+  else sessionStorage.removeItem(SESSION_KEY);
   const xiiliSel = $('xiili-select');
-  if (xiiliSel) xiiliTarget = parseInt(xiiliSel.value) || 5;
+  if (pendingResume) xiiliTarget = parseInt(pendingResume.xiiliTarget, 10) || xiiliTarget;
+  else if (xiiliSel) xiiliTarget = parseInt(xiiliSel.value) || 5;
   showScreen('waiting');
   renderWaitingRoom([]);
   // Send xiiliTarget to server so it can track it per room
   const payload = myProfileName
     ? { name, profileName: myProfileName, xiiliTarget }
     : { name, xiiliTarget };
+  if (pendingResume) payload.token = pendingResume.token;
+  const publicIp = await getPublicClientIp();
+  if (publicIp) payload.publicIp = publicIp;
   if (socket) socket.emit('joinRandom', payload);
   startWaitingCountdown();
+  if (pendingResume) {
+    showNotification('Ciyaartii hore waa la helay — ciyaarta xigta ayaa la sii wadayaa.', 5000);
+  }
   setTimeout(() => { typeWriter('waiting-typewriter', `${name}, soo dhowoow! Dulqaado fadlan inta ay ciyaartooyda kale ku soo biirayaan...`, 48); }, 300);
 }
 
@@ -1478,9 +1650,11 @@ function setLoggedIn(profile) {
   const nameInput = $('name-input');
   if (nameInput) nameInput.value = profile.name;
   renderAuthStatus();
+  announceOnlineProfile(profile);
 }
 
 function setLoggedOut() {
+  if (socket?.connected) socket.emit('clearOnlineProfile');
   myProfileName = null;
   myProfileData = null;
   try { localStorage.removeItem(PROFILE_KEY); } catch (e) {}
@@ -1510,8 +1684,8 @@ function renderAuthStatus() {
     statusEl.innerHTML = `
       <div class="auth-logged-in">
         <span class="auth-name">👤 ${myProfileData.name}</span>
-        <span class="auth-score">${sign}${myProfileData.score} dhibco</span>
-        <span class="auth-stats">(${myProfileData.wins}G · ${myProfileData.fooros}F · ${myProfileData.games} ciyaar)</span>
+        <span class="auth-score">Guud: ${sign}${myProfileData.score} dhibco</span>
+        <span class="auth-stats">(${myProfileData.wins} guul · ${myProfileData.fooros} fooro/guuldarro · ${myProfileData.games} ciyaar)</span>
         <button class="btn-auth-small btn-auth-logout" onclick="setLoggedOut()">Ka bax</button>
       </div>`;
     loginArea.classList.add('hidden');
@@ -1805,23 +1979,11 @@ function checkSeasonEnd() {
   // 2. Hadda muuji modal-ka
   modal.classList.remove('hidden');
 
-  // 3. Markaad hubiso in jadwalkii la dhisay, halkaan ku dhufo tirtiridda (ama uga tag sidaada haddii resetProfileScoresOnSeasonEnd aysan isla markaana tirtiraynin variable-ka aan kor ku isticmaalnay ee mergedScores)
-  resetProfileScoresOnSeasonEnd();
-}
-
-// Server-ku wuxuu si toos ah u reset-gareeyaa profiles-ka marka xilligu dhammaado.
-function resetProfileScoresOnSeasonEnd() {
-  // Server-ku wuxuu reset-gareeyaa dhammaan profiles-ka marka xilligu dhammaado.
-  // Browser-ka sidoo kale ka nadiifi xogta hore si 1G/3F/12 ciyaar aysan uga
-  // muuqan profile-ka ilaa xog cusub la bilaabo.
-  if (myProfileData) {
-    myProfileData = { ...myProfileData, score: 0, wins: 0, fooros: 0, games: 0 };
-    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(myProfileData)); } catch (e) {}
-    renderAuthStatus();
-  }
 }
 
 function startNewSeason() {
+  clearPendingResume();
+  pendingResumeRequested = false;
   if (socket && socket.connected) socket.emit('startNewSeason');
   sessionFooros = {};
   serverSessionScores = {};
@@ -1835,6 +1997,9 @@ function startNewSeason() {
 function startNextGame() {
   const modal = $('gameover-modal');
   if (modal) modal.classList.add('hidden');
+  clearPendingResume();
+  pendingResumeRequested = false;
+  pendingNextGame = true;
 
   // Ciyaar cusub ha ku bilaaban leaveGame + reload: taas waxay ka
   // saari jirtay ciyaaryahanka qolka oo mararka qaar waxay jabin jirtay
@@ -1845,12 +2010,21 @@ function startNextGame() {
   lastPickedDiscardId = null;
   if (turnTimerInterval) clearInterval(turnTimerInterval);
 
-  if (socket && socket.connected) {
-    socket.emit('forceResetGame');
-  } else {
-    // Haddii xiriirku go'an yahay, habka hore ee reconnect-ka ha shaqeeyo.
-    exitGame();
-  }
+  emitForceResetWhenReady();
+}
+
+function emitForceResetWhenReady() {
+  if (!pendingNextGame || !socket || !socket.connected || !socketRoomReady) return;
+
+  pendingNextGame = false;
+  socket.emit('forceResetGame', result => {
+    if (!result?.ok) {
+      // Room-ku weli diyaar ma ahayn; connect/matchFound ayaa dib u tijaabinaya.
+      pendingNextGame = true;
+      socketRoomReady = false;
+      showNotification('Xiriirka ayaa dib loo hagaajinayaa — ciyaarta xigta way bilaabanaysaa.', 4000);
+    }
+  });
 }
 
 function typeWriter(elementId, text, speed = 45) {
@@ -1916,6 +2090,17 @@ function scheduleServerOfflineWipe() {
   if (serverOfflineTimer) return;
   serverOfflineTimer = setTimeout(() => {
     serverOfflineTimer = null;
+    /*
+     * Inta ciyaartu socoto, server-ku wuxuu room-ka iyo sessionToken-ka
+     * hayaa muddo dheer si reconnect loo sameeyo. Haddii browser-ku 15
+     * ilbiriqsi kadib token-ka tirtiro, PC/mobile-ka soo laabanaya wuxuu
+     * ku harayaa shaashad duug ah oo uusan room-ka dib ugu biiri karin.
+     */
+    if (inGame) {
+      console.warn('[t101] Server-ku wuu go\'ay, laakiin session-ka ciyaarta waa la ilaalinayaa si reconnect loo sameeyo.');
+      showNotification('Xiriirka server-ka wuu go\'ay — ciyaarta waa la ilaalinayaa, dib ayaa loogu xirmayaa.', 6000);
+      return;
+    }
     wipeAllSessionMemory('server offline > ' + SERVER_OFFLINE_GRACE_MS + 'ms');
   }, SERVER_OFFLINE_GRACE_MS);
 }
@@ -1928,19 +2113,25 @@ function initSocket() {
   socket = io({ path: '/game-io', transports: ['polling', 'websocket'] });
 
   socket.on('disconnect', () => {
+    socketRoomReady = false;
     showReconnectOverlay("Xiriirka waa go'ay — Dib u xidh...");
     scheduleServerOfflineWipe();
   });
   socket.on('connect', () => {
+    socketRoomReady = false;
     hideReconnectOverlay();
     cancelServerOfflineWipe();
+    announceOnlineProfile();
     if (inGame && myName) {
       const storedToken = sessionStorage.getItem(SESSION_KEY);
       if (storedToken && socket) {
-        const reconnPayload = myProfileName
-          ? { name: myName, profileName: myProfileName, xiiliTarget, token: storedToken }
-          : { name: myName, xiiliTarget, token: storedToken };
-        socket.emit('joinRandom', reconnPayload);
+        getPublicClientIp().then(publicIp => {
+          const reconnPayload = myProfileName
+            ? { name: myName, profileName: myProfileName, xiiliTarget, token: storedToken }
+            : { name: myName, xiiliTarget, token: storedToken };
+          if (publicIp) reconnPayload.publicIp = publicIp;
+          if (socket?.connected) socket.emit('joinRandom', reconnPayload);
+        });
       }
     }
   });
@@ -1976,8 +2167,10 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     scheduleServerOfflineWipe();
   });
   socket.on('sessionToken', token => { if (token) sessionStorage.setItem(SESSION_KEY, token); });
+  socket.on('onlineUsersUpdate', data => renderOnlineUsers(data));
 
   socket.on('waitingRoomUpdate', data => {
+    renderRoomLabel(data?.roomNumber);
     const waitingPlayers = Array.isArray(data?.players) ? data.players : [];
     players = waitingPlayers
       .filter(Boolean)
@@ -2008,20 +2201,36 @@ function handleGameOverData(resultsFromBackendOrLogic) {
 
   socket.on('matchFound', data => {
     stopWaitingCountdown();
+    socketRoomReady = true;
+    renderRoomLabel(data?.roomNumber);
     discardTop = data.topDiscard; currentTurnId = data.currentTurn;
     isMyTurn = socket && data.currentTurn === socket.id;
     showScreen('game'); renderAll();
+    if (pendingResumeRequested) {
+      pendingResumeRequested = false;
+      pendingNextGame = true;
+    }
+    setTimeout(emitForceResetWhenReady, 150);
   });
 
   socket.on('playersUpdate', data => {
     if (!data) return;
+    renderRoomLabel(data.roomNumber);
     const baddaCardIds = new Set(myHand.filter(c => c.fromDiscard).map(c => c.id));
     players = data.players || [];
     stockCount = data.stockCount;
     currentTurnId = data.currentTurnId;
     const wasMyTurn = isMyTurn;
     isMyTurn = socket && data.currentTurnId === socket.id;
-    if (isMyTurn && !wasMyTurn) { startTurnTimer(); showNotification('Kor ka qaado ama tuurista', 2500); }
+    const serverTurnStartTime = Number(data.turnStartTime) || 0;
+    if (isMyTurn && (!wasMyTurn || serverTurnStartTime !== lastTurnStartTime)) {
+      startTurnTimer(serverTurnStartTime);
+      if (!wasMyTurn) showNotification('Kor ka qaado ama tuurista', 2500);
+    } else if (!isMyTurn && wasMyTurn) {
+      clearInterval(turnTimerInterval);
+      turnTimerInterval = null;
+      lastTurnStartTime = 0;
+    }
     if (data.nextRequiredPoints !== undefined) currentMinToOpen = data.nextRequiredPoints;
     if (data.barrierHistory && data.barrierHistory.length > 0) barrierHistory = data.barrierHistory;
     if (socket) {
@@ -2137,6 +2346,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
 
   // ─── SESSION FOORO UPDATE — server ayaa diraya dhibcaha ciyaartoyda oo dhan ─
   socket.on('sessionFooroUpdate', data => {
+    renderRoomLabel(data?.roomNumber);
     if (data && data.scores) {
       setSessionScores(data.scores);
       sessionDabaaqPairs = Array.isArray(data.dabaaqPairs) ? data.dabaaqPairs : [];
@@ -2149,15 +2359,6 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     }
     saveSessionScores();
     updateFooroPanel();
-  });
-
-  socket.on('profilesReset', () => {
-    if (myProfileData) {
-      myProfileData = { ...myProfileData, score: 0, wins: 0, fooros: 0, games: 0 };
-      try { localStorage.setItem(PROFILE_KEY, JSON.stringify(myProfileData)); } catch (e) {}
-      renderAuthStatus();
-    }
-    latestLeaderboard = [];
   });
 
   // Profile-ka joogtada ah ha ka sugin logout/login; server-ku wuxuu diraa
@@ -2214,6 +2415,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
 
 socket.on('gameOver', data => {
   clearInterval(turnTimerInterval);
+  savePendingResume();
   sessionStorage.removeItem(SESSION_KEY);
   if (data.allPlayers) { players = data.allPlayers || []; }
   renderAll();
@@ -2423,11 +2625,17 @@ socket.on('gameOver', data => {
     }
 
     const openInfo = $('modal-open-info');
+     const isDabaaq = data.dabaaqType === 'negative' || data.dabaaqType === 'positive';
     if (openInfo) {
       let xiradLine = '';
-      const isDabaaq = data.dabaaqType === 'negative' || data.dabaaqType === 'positive';
 
-      if (xiradTurub) {
+       /*
+        * Dabaaqdu waxay dhici kartaa iyadoo providerId uu null yahay.
+        * Provider-ku wuxuu la xiriiraa Foorada, halka pair-ka Dabaaqdu
+        * noqon karo winner iyo ciyaaryahan kale. Sidaas darteed ha ku
+        * xirin sharaxaadda Dabaaqda xiradTurub oo keliya.
+        */
+       if (xiradTurub || isDabaaq || fooroTarget) {
         const victim = fooroTarget ? fooroTarget.name : "Ciyaartoy kale";
         let mathExplanation = '';
         if (isDabaaq) {
@@ -2684,8 +2892,30 @@ socket.on('receiveChat', data => {
       if (data.roundDeltas && socket) {
         const myDelta = data.roundDeltas[socket.id];
         if (myDelta) {
-          const sign = myDelta.delta > 0 ? '+' : '';
-          showNotification(`Dhibacyadaada: ${sign}${myDelta.delta} (Wadarta: ${myDelta.total >= 0 ? '+' : ''}${myDelta.total})`, 5000);
+          /*
+           * myDelta.total waa score-ka profile-ka oo dhan, ma aha score-ka
+           * xilligan socda. Haddii aan labadan la kala magacaabin, ciyaaryahan
+           * wuxuu u malayn karaa in fooro qarsoon lagu daray Game Over-ka.
+           */
+          const roundSign = myDelta.delta > 0 ? '+' : '';
+          const profileSign = myDelta.total >= 0 ? '+' : '';
+          const myScoreKey = normalizeName(myName || myProfileName);
+          const currentSessionScore =
+            sessionFooros[myScoreKey] ||
+            serverSessionScores[myScoreKey] ||
+            { wins: 0, fooros: 0 };
+          const sessionNet =
+            (Number(currentSessionScore.wins) || 0) -
+            (Number(currentSessionScore.fooros) || 0);
+          const sessionSign = sessionNet > 0 ? '+' : '';
+          const sessionFooroCount = Number(currentSessionScore.fooros) || 0;
+
+          showNotification(
+            `Wareeggan: ${roundSign}${myDelta.delta} · ` +
+            `Xilligan: ${sessionSign}${sessionNet} (${sessionFooroCount} fooro) · ` +
+            `Profile guud: ${profileSign}${myDelta.total}`,
+            6000
+          );
         }
       }
     }
@@ -2702,7 +2932,18 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && socket && inGame) socket.emit('request_sync');
 });
 
+document.addEventListener('click', event => {
+  const wrapper = $('hdr-online-users');
+  if (!wrapper || wrapper.contains(event.target)) return;
+  toggleOnlineUsers(false);
+});
+
 document.addEventListener('DOMContentLoaded', () => {
+  const onlineToggle = $('hdr-online-toggle');
+  if (onlineToggle) onlineToggle.addEventListener('click', event => {
+    event.stopPropagation();
+    toggleOnlineUsers();
+  });
   loadSessionScores();
   restoreSavedProfile();
   const _tl = $('fooro-target-label');
@@ -2721,6 +2962,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   updateFooroPanel();
   const joinBtn = $('join-btn');
+  const pendingResume = getPendingResume();
+  if (pendingResume) {
+    const nameInput = $('name-input');
+    if (nameInput && !nameInput.value) nameInput.value = pendingResume.name;
+    if (joinBtn) joinBtn.textContent = 'SII WAD CIYAARTA';
+  }
   if (joinBtn) joinBtn.addEventListener('click', joinGame);
   const nameInput = $('name-input');
   if (nameInput) nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') joinGame(); });

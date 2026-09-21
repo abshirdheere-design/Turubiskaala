@@ -3,6 +3,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, copyFil
 import { extname, join, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server as IOServer } from 'socket.io';
+import geoip from 'geoip-lite';
 import { createWinnerHistoryStore } from './listwinersengine.js';
 import { explainGameOver } from './gameover-explanation-engine.js';
 
@@ -152,31 +153,6 @@ function backupProfilesData() {
   } catch (err) {
     console.error('❌ Backup profiles waa fashilmay:', err.message || err);
   }
-}
-
-function resetAllProfileStats() {
-  // Xisaabaadka iyo PIN-yada waa la hayaa; tirakoobka xilli-ciyaareedka
-  // (score, guulo, foorooyin iyo ciyaaro) ayaa keliya dib loogu celinayaa eber.
-  for (const profile of playerProfiles.values()) {
-    profile.score = 0;
-    profile.wins = 0;
-    profile.fooros = 0;
-    profile.games = 0;
-  }
-
-  for (const [key, profile] of Object.entries(globalProfiles)) {
-    if (!profile || typeof profile !== 'object') continue;
-    profile.score = 0;
-    profile.wins = 0;
-    profile.fooros = 0;
-    profile.games = 0;
-    globalProfiles[key] = profile;
-  }
-
-  // Labada fayl si isku mar ah u cusboonaysii; backup-ga ha sii hayn tiradii
-  // hore, taas oo ahayd sababta ay mar kale ugu soo laabanaysay.
-  saveProfilesData();
-  backupProfilesData();
 }
 
 function saveSessionsData() {
@@ -540,19 +516,48 @@ function updatePersistentScores(room, scoreResult) {
 }
 
 // ─── Session Score Tracking ────────────────────────────────────────────────────
+//
+// Session-ku waa inuu ku xirnaadaa room-ka, ma aha target-ka xiiliga oo keliya.
+// Haddii key-gu ahaan lahaa "5" ama "10", dhammaan rooms-ka isku target-ka
+// wata waxay wadaagi lahaayeen Jaamac/Jimcaale/Faarax iyo score-yadooda.
 const xiiliSessions = new Map();
+let nextXiiliSessionNumber = Object.keys(globalSessions || {}).reduce((max, key) => {
+  const match = /^session(\d+)$/.exec(String(key));
+  return match ? Math.max(max, Number(match[1]) || 0) : max;
+}, 0) + 1;
+
+function allocateXiiliSessionId() {
+  let sessionId;
+  do {
+    sessionId = `session${nextXiiliSessionNumber++}`;
+  } while (
+    xiiliSessions.has(sessionId) ||
+    Object.prototype.hasOwnProperty.call(globalSessions || {}, sessionId)
+  );
+  return sessionId;
+}
 
 function normalizeXiiliTarget(target) {
   const parsed = parseInt(target, 10);
   return parsed === 10 ? 10 : 5;
 }
 
-function getXiiliSession(target = 5) {
+function getXiiliSession(room, target = 5) {
   const normalizedTarget = normalizeXiiliTarget(target);
-  const key = String(normalizedTarget);
+  if (!room || typeof room !== 'object') {
+    throw new Error('Xiili session-ku wuxuu u baahan yahay room gaar ah.');
+  }
+
+  // Room kasta wuxuu helayaa session cusub. Session-ka lama raadinayo
+  // iyadoo lagu salaynayo target-ka 5/10, si rooms kala duwan aysan score
+  // ula wadaagin bots isku magac ah.
+  if (!room.sessionId) room.sessionId = allocateXiiliSessionId();
+  const key = String(room.sessionId);
+
   if (!xiiliSessions.has(key)) {
     const saved = globalSessions && typeof globalSessions === 'object' ? globalSessions[key] : null;
     xiiliSessions.set(key, {
+      sessionId: key,
       target: normalizedTarget,
       scores: saved && typeof saved.scores === 'object' ? saved.scores : {},
       dabaaqPairs: normalizeSavedDabaaqPairs(saved),
@@ -657,13 +662,13 @@ function rebalanceScoreMap(scores, preferredName = null) {
 
 function attachRoomToXiiliSession(room, target = 5) {
   room.xiiliTarget = normalizeXiiliTarget(target);
-  const season = getXiiliSession(room.xiiliTarget);
+  const season = getXiiliSession(room, room.xiiliTarget);
   room.sessionScores = season.scores;
   return season;
 }
 
 function sessionHasPreviousFooro(room) {
-  const season = getXiiliSession(room?.xiiliTarget || 5);
+  const season = getXiiliSession(room, room?.xiiliTarget || 5);
   return Object.values(season?.scores || {}).some(
     score => (Number(score?.fooros) || 0) > 0
   );
@@ -752,9 +757,16 @@ function initializeRoomScores(room, target = 5) {
     });
   }
 
-  // Haddii session kaydsan uu ka yimid xisaabtii hore ee qaldan,
-  // sax wadarta ka hor inta aan panel-ka loo dirin ciyaartoyda.
-  rebalanceScoreMap(room.sessionScores);
+  /*
+   * Ha dib-u-miisaamin score-yada halkan.
+   *
+   * initializeRoomScores() waxaa loo isticmaalaa bilowga ciyaarta iyo
+   * dhammaadka ciyaarta. Haddii rebalanceScoreMap() halkan lagu waco,
+   * score-ka bilowga ah ee Dabaaqda ayaa iskiis isu beddeli kara ka hor
+   * inta aan pair-ka la xisaabin. Tusaale ahaan -4/-1 wuxuu isu rogi
+   * karaa -3/-1, taas oo ka dhigaysa natiijada Dabaaqda mid khaldan.
+   * Score-ku waa inuu is beddelaa oo keliya marka wareegga la xiro.
+   */
 
   /*
    * MUHIIM:
@@ -1014,7 +1026,7 @@ function applyCorrectDabaaqScores(
   });
 
   const target = room.xiiliTarget || 5;
-  const season = getXiiliSession(target);
+  const season = getXiiliSession(room, target);
 
   if (season?.ended) {
     return {
@@ -1118,13 +1130,47 @@ function applyCorrectDabaaqScores(
    */
   let dabaaqPairIndex = -1;
   let dabaaqPair = null;
-  const pendingPairs = Array.isArray(room.activeDabaaqPairs) && room.activeDabaaqPairs.length
-    ? room.activeDabaaqPairs
-    : room.dabaaqPairs;
+  /*
+   * Snapshot-ka ciyaarta ayaa ah isha koowaad, laakiin haddii uu duugoobo
+   * ama uusan pair-ka ku jirin, room.dabaaqPairs waa fallback muhiim ah.
+   * Hore activeDabaaqPairs oo aan empty ahayn ayaa si buuxda u qarinayay
+   * pair-ka saxda ah ee room.dabaaqPairs ku jiray; taas ayaa mararka qaar
+   * Dabaaqda ka dhigi jirtay in la iska indhatiro.
+   */
+  const pendingPairs = [];
+  const seenPendingPairs = new Set();
+  const pairSources = [
+    ...(Array.isArray(room.activeDabaaqPairs) ? room.activeDabaaqPairs : []),
+    ...(Array.isArray(room.dabaaqPairs) ? room.dabaaqPairs : []),
+  ];
+  for (const pair of pairSources) {
+    const pairKeys = [
+      normalizeSessionName(pair?.player1),
+      normalizeSessionName(pair?.player2),
+    ].filter(Boolean).sort();
+    if (pairKeys.length !== 2 || pairKeys[0] === pairKeys[1]) continue;
+    const pairKey = pairKeys.join('::');
+    if (seenPendingPairs.has(pairKey)) continue;
+    seenPendingPairs.add(pairKey);
+    pendingPairs.push(pair);
+  }
 
-  // Tallaabada 1aad: Raadi pair-ka winner-ka iyo qofka Fooradu ku
-  // dhacday. Provider-ku waa qofka kaarkiisa laga qaatay oo keliya;
-  // ma aha qofka Dabaaqda lagu go'aaminayo.
+  /*
+   * Tallaabada 1aad:
+   *
+   * Negative Dabaaq waxaa lammaane ka ah guuleystaha iyo provider-ka
+   * (qofkii kaarkiisa laga xiray), ma aha qofka Fooradu ku dhacday.
+   * Labadan qof way kala duwanaan karaan:
+   *
+   *   winner   = Jimcaale (-2)
+   *   provider = Jaamac   (-1)  -> Jaamac ayaa Dabaaq ku darsanaya -2
+   *   victim   = Abshir   (-1)  -> Fooro keliya ayaa ku dhacaysa -2
+   *
+   * Haddii victim-ka la hormariyo, Abshir waxaa loo qaadanayaa lammaanaha
+   * Dabaaqda, waxaana hal Fooro si khalad ah loogu dari karaa laba jeer.
+   * Positive Dabaaq-ga, oo aan ku xirnayn provider-ka, wuxuu weli raacayaa
+   * victim-ka marka uu jiro.
+   */
   for (let i = 0; i < pendingPairs.length; i++) {
     const pair = pendingPairs[i];
 
@@ -1132,10 +1178,14 @@ function applyCorrectDabaaqScores(
     const p2 = normalizeSessionName(pair.player2);
     const pairHasWinner = winnerKey === p1 || winnerKey === p2;
     const pairOtherKey = winnerKey === p1 ? p2 : p1;
+    const isNegativePair = pair.type === 'negative_negative';
+    const preferredOtherKey = isNegativePair
+      ? (providerKey || victimKey)
+      : (victimKey || providerKey);
 
     if (
       pairHasWinner &&
-      (pairOtherKey === victimKey || (!victimKey && pairOtherKey === providerKey))
+      pairOtherKey === preferredOtherKey
     ) {
       dabaaqPairIndex = i;
       dabaaqPair = pair;
@@ -1268,6 +1318,7 @@ function applyCorrectDabaaqScores(
    */
   let dabaaqType = null;
   let positiveDabaaqApplied = false;
+  let appliedDabaaqAmount = 0;
 
   if (dabaaqPair) {
     // API-ga dibadda wuxuu isticmaalaa magacyadan kooban; kaydka gudaha
@@ -1385,6 +1436,7 @@ function applyCorrectDabaaqScores(
         1,
         Math.min(Math.abs(winnerBefore), Math.abs(otherBefore))
       );
+      appliedDabaaqAmount = dabaaqAmount;
 
       // Negative Dabaaqdu waxay siin kartaa guuleystaha ugu badnaan +1.
       // Sidaas darteed -4 -> -2, -2 -> 0, -1 -> +1.
@@ -1403,8 +1455,11 @@ function applyCorrectDabaaqScores(
       console.log('🔴 NEGATIVE DABAAQ LA QAATAY:', {
         winner: winnerName,
         other: otherName,
+        winnerBefore,
+        otherBefore,
         winnerResult: winnerAfter,
-        otherResult: -((Number(otherScore?.fooros) || 0) + dabaaqAmount),
+        otherResult: netOf(scores[otherKey]),
+        fooroTarget: victimName || null,
         dabaaqAmount
       });
     }
@@ -1475,12 +1530,15 @@ function applyCorrectDabaaqScores(
   if (victimKey && victimKey !== winnerKey) {
     const victim = ensureSessionScore(scores, victimName);
     if (victim) {
-      /*
-       * Kala saar qofka hadda foorada hayay iyo milkiilihii
-       * foorada. Kaliya winner score ahaan taban yahay ayaa
-       * fooradii hore la wareejinayaa; score 0 ama ka sarreeya
-       * wuxuu abuuraa fooro cusub.
-       */
+       /*
+        * Kala saar qofka hadda foorada hayay iyo milkiilihii
+        * foorada. Fooro cusub waxay ka jartaa hal guul oo hore,
+        * kadibna waxay ku dartaa hal fooro:
+        *
+        *   +1 (1W-0F) -> -1 (0W-1F)
+        *
+        * Sidaas guushii hore uma sii qarinayso ciqaabta foorada.
+        */
       fooroWasTransferred = transfersExistingFooro;
       transferredFooroOwnerName =
         transfersExistingFooro
@@ -1488,12 +1546,17 @@ function applyCorrectDabaaqScores(
           : winnerName;
 
       /*
-       * Haddii Fooradu ugu noqoto milkiilihii hore, weli waa Fooro cusub
-       * oo ku dhacday qofkaas. Ha baabi'in. Tusaale ahaan Faarax -4 oo
-       * Fooradiisii ugu soo noqota waa inuu noqdaa -5, si xilligu u
-       * dhammaado marka target-ku yahay 5.
+        * Haddii Fooradu ugu noqoto milkiilihii hore, weli waa Fooro cusub
+        * oo ku dhacday qofkaas. Ha baabi'in. Tusaale ahaan Faarax -4 oo
+        * Fooradiisii ugu soo noqota waa inuu noqdaa -5, si xilligu u
+        * dhammaado marka target-ku yahay 5.
+        *
+        * Fooradu hal dhibic ayay ka jartaa score-ka positive-ka ah:
+        * +2 (2W-0F) -> +1 (2W-1F).
+        * Ha laga jarin wins sidoo kale, sababtoo ah taas waxay ka dhigi
+        * lahayd +2 -> 0 (1W-1F), oo ah ciqaab laba-laab ah.
        */
-      victim.fooros = (Number(victim.fooros) || 0) + 1;
+       victim.fooros = (Number(victim.fooros) || 0) + 1;
       victim.fooroOwners = [
         ...fooroOwnersFor(victim),
         transferredFooroOwnerName
@@ -1521,13 +1584,11 @@ function applyCorrectDabaaqScores(
     displayName: winner.displayName || winnerName
   };
 
-  const balanceFix = positiveDabaaqApplied
-    ? null
-    : rebalanceScoreMap(scores, winnerName);
-  if (balanceFix) {
-    console.log('⚖️ SESSION SCORE BALANCED:', balanceFix);
-  }
-
+  /*
+   * Ha isticmaalin rebalanceScoreMap() kadib scoring-ka. Dabaaq iyo Fooro
+   * waa transactions leh dhinacyadooda saxda ah; sixid guud waxay qarin
+   * kartaa cidda hal dhibic qaadatay ama laga jaray.
+   */
   /*
    * Deltas-ka persistent profile-ka ka soo saar farqiga dhabta ah ee
    * session-ka. Tani waxay daboolaysaa winner-ka, qofka dabaaqda laga
@@ -1612,7 +1673,9 @@ function applyCorrectDabaaqScores(
           player1: dabaaqPair.player1,
           player2: dabaaqPair.player2,
           type: dabaaqPair.type,
-          amount: dabaaqPair.amount || 2,
+          amount: dabaaqType === 'negative'
+            ? (appliedDabaaqAmount || 1)
+            : (dabaaqPair.amount || 2),
           player1Before: scoreSnapshot(dabaaqPair.player1, beforeScores),
           player2Before: scoreSnapshot(dabaaqPair.player2, beforeScores),
           player1After: scoreSnapshot(dabaaqPair.player1, scores),
@@ -1679,12 +1742,14 @@ function broadcastSessionScores(roomId) {
   room.players.forEach(p => {
     ensureSessionScore(room.sessionScores, p.name);
   });
-  rebalanceScoreMap(room.sessionScores);
+  // Broadcast-ku waa read-only; yuusan score-ka session-ka si qarsoon u
+  // beddelin. Sixidda score-ka waxay dhacdaa oo keliya marka game la xiro.
 
   io.to(roomId).emit('sessionFooroUpdate', {
     scores: getRoomVisibleScores(room),
     dabaaqPairs: Array.isArray(room.dabaaqPairs) ? room.dabaaqPairs : [],
-    xiiliTarget: room.xiiliTarget || 5
+    xiiliTarget: room.xiiliTarget || 5,
+    roomNumber: room.roomNumber
   });
 }
 
@@ -1709,17 +1774,54 @@ function checkAndEmitSeasonEnd(roomId) {
   return false;
 }
 
-function resetXiiliSession(target = 5) {
+function resetXiiliSession(room, target = 5) {
   const normalizedTarget = normalizeXiiliTarget(target);
-  const key = String(normalizedTarget);
-  xiiliSessions.set(key, { target: normalizedTarget, scores: {}, ended: false });
+  const oldSessionId = room?.sessionId ? String(room.sessionId) : null;
+
+  /*
+   * Reset dhab ah:
+   * session-kii target-ka gaaray ha ku harin xiiliSessions ama
+   * globalSessions isagoo score eber ah. Qolka wuxuu helayaa sessionId cusub.
+   */
+  if (oldSessionId) {
+    xiiliSessions.delete(oldSessionId);
+    if (globalSessions && typeof globalSessions === 'object') {
+      delete globalSessions[oldSessionId];
+    }
+  }
+
+  room.sessionId = allocateXiiliSessionId();
+  const season = getXiiliSession(room, normalizedTarget);
+  season.target = normalizedTarget;
+  season.scores = {};
+  season.dabaaqPairs = [];
+  season.ended = false;
+  room.sessionScores = season.scores;
+  room.dabaaqPairs = [];
+  room.activeDabaaqPairs = [];
   saveSessionsData();
+  return season;
 }
 
 // ─── Game Logic ───────────────────────────────────────────────────────────────
 const TURN_TIME_LIMIT = 30000;
-const RECONNECT_WINDOW_MS = 5 * 60 * 1000;
+const HUMAN_TIMEOUTS_BEFORE_BOT = 3;
+// Browser-ku haddii uu si kama' ah u xirmo kadib game-over,
+// ciyaartoygu ha haysto waqti ku filan oo uu isla room-ka ugu soo laabto.
+const RECONNECT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const rooms = {};
+const onlineProfiles = new Map();
+
+function allocateRoomNumber() {
+  const used = new Set(
+    Object.values(rooms)
+      .map(room => Number(room?.roomNumber))
+      .filter(number => Number.isInteger(number) && number > 0)
+  );
+  let number = 1;
+  while (used.has(number)) number++;
+  return number;
+}
 
 function genToken() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -2152,10 +2254,72 @@ function cardFitsAnyOpenedSet(room, card) {
 
 function resetPlayerState(p) {
   p.hand = []; p.isOpened = false; p.hasActioned = false;
+  p.turnDrewCard = false;
   p.pickedFromDiscard = false; p.lastPickedCardId = null;
   p.openedSets = []; p.hoosgale = false; p.hoosgaleOrder = null; p.tempScore = 0;
   p.openedWithCardId = null; p.openProviderId = null;
   p.dabaaqProviderId = null;
+  p.timeoutStreak = 0;
+}
+
+function recordHumanAction(player) {
+  if (!player || player.isBot) return;
+  // Saddexda timeout waa inay noqdaan kuwo isku xiga; tallaabo dhab ah
+  // oo ciyaaryahanku qaado waxay jebisaa taxanaha.
+  player.timeoutStreak = 0;
+}
+
+function restoreTemporaryTimeoutPlayer(player) {
+  if (!player || !player.timeoutAsBot) return;
+  // Timeout-ka 1aad/2aad robot-ku wuxuu ciyaarayaa hal door oo keliya.
+  // Kadib marka doorku dhammaado, qofku weli waa ciyaaryahan caadi ah.
+  player.isBot = false;
+  player.timeoutAsBot = false;
+}
+
+function convertTimedOutPlayerToBot(roomId, player) {
+  const room = rooms[roomId];
+  if (!room || !player || player.isBot) return false;
+
+  player.timeoutStreak = (Number(player.timeoutStreak) || 0) + 1;
+  if (player.timeoutStreak < HUMAN_TIMEOUTS_BEFORE_BOT) return false;
+
+  // Magaca, profileName-ka iyo sessionToken-ka ha la lumin:
+  // ciyaaryahanku wuu soo laaban karaa oo isla booskiisa ayuu dib u heli karaa.
+  player.isBot = true;
+  player.autoBot = true;
+  player.autoBotAt = Date.now();
+  io.to(roomId).emit(
+    'notification',
+    `🤖 ${player.name} wuxuu noqday Robot kadib ${HUMAN_TIMEOUTS_BEFORE_BOT} jeer oo waqtigu ka dhammaaday. Markuu soo laabto isla ciyaarta ayuu ku soo noqon karaa.`
+  );
+  updateRoomPlayers(roomId);
+  return true;
+}
+
+function convertDisconnectedPlayerToBot(roomId, player) {
+  const room = rooms[roomId];
+  if (!room || !player || player.isBot) return false;
+
+  /*
+   * Mobile browser-ku mararka qaar wuxuu xiraa socket-ka ka hor inta
+   * timeout-kii saddexda jeer uusan dhammaan. Qofka disconnected-ka ah
+   * isla markiiba bot ha noqdo si ciyaartu uusan u istaagin.
+   *
+   * sessionToken-ka iyo magaca lama taabanayo; haddii uu soo laabto,
+   * joinRandom() wuxuu ka saarayaa autoBot-ka oo isla booskii ayuu siinayaa.
+   */
+  player.isBot = true;
+  player.autoBot = true;
+  player.autoBotAt = Date.now();
+  player.timeoutAsBot = false;
+
+  io.to(roomId).emit(
+    'notification',
+    `🤖 ${player.name} wuxuu noqday Robot maadaama xiriirkii ka go'ay. Haddii uu soo laabto, ciyaarta ayuu dib ugu soo laaban karaa.`
+  );
+  updateRoomPlayers(roomId);
+  return true;
 }
 
 // ─── Socket.IO ────────────────────────────────────────────────────────────────
@@ -2164,6 +2328,62 @@ const io = new IOServer(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
   transports: ['polling', 'websocket'],
 });
+
+function getClientCountry(socket, publicIp = '') {
+  const forwarded = socket?.handshake?.headers?.['x-forwarded-for'];
+  const forwardedIp = Array.isArray(forwarded)
+    ? forwarded[0]
+    : String(forwarded || '').split(',')[0].trim();
+  const candidates = [
+    publicIp,
+    forwardedIp,
+    socket?.handshake?.address || '',
+  ];
+
+  for (const candidate of candidates) {
+    const ip = String(candidate || '').trim().replace(/^::ffff:/, '');
+    if (!ip) continue;
+    const geo = geoip.lookup(ip);
+    if (geo?.country) return geo.country;
+  }
+
+  return 'XX';
+}
+
+function getOnlineUsers() {
+  const users = new Map();
+
+  for (const profile of onlineProfiles.values()) {
+    if (!profile?.socketId || !profile.name) continue;
+    users.set(profile.socketId, {
+      name: profile.name,
+      country: profile.country || 'XX',
+    });
+  }
+
+  for (const room of Object.values(rooms)) {
+    for (const player of (room.players || [])) {
+      if (!player || !player.online || player.isBot || !player.name) continue;
+      const key = player.id || player.sessionToken || `${room.id}:${player.name}`;
+      users.set(key, {
+        name: player.name,
+        country: player.country || 'XX',
+      });
+    }
+  }
+
+  return [...users.values()].sort((a, b) =>
+    String(a.name).localeCompare(String(b.name), 'so')
+  );
+}
+
+function broadcastOnlineUsers() {
+  const users = getOnlineUsers();
+  io.emit('onlineUsersUpdate', {
+    count: users.length,
+    users,
+  });
+}
 
 function updateRoomPlayers(roomId) {
   const room = rooms[roomId]; if (!room) return;
@@ -2175,6 +2395,7 @@ function updateRoomPlayers(roomId) {
     turnStartTime: room.turnStartTime,
     nextRequiredPoints: getOpeningMinimum(room),
     barrierHistory: room.barrierHistory || [101],
+    roomNumber: room.roomNumber,
   });
 }
 
@@ -2191,6 +2412,8 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   const room = rooms[roomId];
   if (!room) return;
 
+  restoreTemporaryTimeoutPlayer(room.players[room.activePlayerIndex]);
+
   const isAllBatuutoFinish = extraData.allBatuuto === true;
   if (!potentialWinner || (!potentialWinner.isOpened && !isAllBatuutoFinish) || room.historyRecorded) return;
   room.historyRecorded = true;
@@ -2204,16 +2427,21 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   });
 
   // 1. SESSION & DABAQA SCORES CALCULATION
-  initializeRoomScores(room, room.xiiliTarget || 5);
-  // Haddii room-ku hore u bilaabmay oo snapshot-kii active-ku duugoobay,
-  // ku dar pair-yada hadda la helay si Dabaaqdu u saameyso ciyaartan.
-  room.activeDabaaqPairs = Array.isArray(room.dabaaqPairs)
-    ? room.dabaaqPairs.map(pair => ({ ...pair }))
-    : [];
-  // Pair-ka waa in la ogaadaa ka hor inta aan natiijada ciyaartan lagu
-  // darin score-ka session-ka. Tani waxay sidoo kale soo kabanaysaa
-  // ciyaar hore u bilaabatay ka hor patch-ka Dabaaqda.
+  /*
+   * Pair-ka wareeggan waxaa lagu qabtay startGame().
+   * Ha dib loogu dhisin endGame() ka hor scoring-ka: taas waxay
+   * beddeli kartaa ama tirtiri kartaa Dabaaqdii wareeggan.
+   */
+  const roundDabaaqPairs =
+    Array.isArray(room.activeDabaaqPairs) && room.activeDabaaqPairs.length
+      ? room.activeDabaaqPairs.map(pair => ({ ...pair }))
+      : (Array.isArray(room.dabaaqPairs)
+          ? room.dabaaqPairs.map(pair => ({ ...pair }))
+          : []);
   room.gameStarted = false;
+  initializeRoomScores(room, room.xiiliTarget || 5);
+  room.dabaaqPairs = roundDabaaqPairs.map(pair => ({ ...pair }));
+  room.activeDabaaqPairs = roundDabaaqPairs.map(pair => ({ ...pair }));
 
   const dabaaqProviderId = potentialWinner.dabaaqProviderId || potentialWinner.openProviderId || null;
   const fooroTargetId = findFooroTarget(potentialWinner.id, dabaaqProviderId, room.players);
@@ -2233,7 +2461,7 @@ function endGame(roomId, potentialWinner, extraData = {}) {
    * ciyaarta xigta. Haddii aan halkan dib loo dhisin, sessionFooroUpdate
    * wuxuu diri lahaa pair-kii lagu sameeyay score-yadii ciyaartii hore.
    */
-  const updatedSeason = getXiiliSession(room.xiiliTarget || 5);
+  const updatedSeason = getXiiliSession(room, room.xiiliTarget || 5);
   rebuildDabaaqPairsFromScores(room, updatedSeason);
   room.activeDabaaqPairs = room.dabaaqPairs.map(pair => ({ ...pair }));
   saveSessionsData();
@@ -2283,11 +2511,11 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   });
   io.emit('winnerHistoryUpdate', winnerHistory.getSummary());
 
-  // Reset-ka profile-ka haddii xiiligu dhammaaday
-  if (getXiiliSession(room.xiiliTarget || 5).ended) {
-    resetAllProfileStats();
-    io.emit('profilesReset');
-  }
+  /*
+   * Marka xilligu dhammaado, resetXiiliSession() ayaa nadiifinaya
+   * session-ka oo keliya. Profile-ku waa taariikhda dhammaan ciyaaraha;
+   * score, guulo, foorooyin iyo tirada ciyaaruhu waa inay sii jiraan.
+   */
 
   // 3. EMIT GAME OVER & LEADERBOARD DATA
   io.to(roomId).emit('gameOver', {
@@ -2334,6 +2562,9 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   // Hubi haddii xilliyagu dhammaadey
   checkAndEmitSeasonEnd(roomId);
 
+  // Ha tirtirin room-ka isla markiiba: ciyaartoydii ciyaarta dhammeeyay
+  // waxay u baahan yihiin inay forceResetGame ku bilaabaan ciyaarta xigta,
+  // taas oo ilaalinaysa isla sessionId iyo foorooyinka xilliga.
   room.cleanupTimer = setTimeout(() => {
     room.cleanupTimer = null;
     const currentRoom = rooms[roomId];
@@ -2342,11 +2573,12 @@ function endGame(roomId, potentialWinner, extraData = {}) {
       io.in(roomId).socketsLeave(roomId);
       delete rooms[roomId];
     }
-  }, 8000);
+  }, 24 * 60 * 60 * 1000);
 }
 
 function moveToNextPlayer(roomId) {
   const room = rooms[roomId]; if (!room) return;
+  restoreTemporaryTimeoutPlayer(room.players[room.activePlayerIndex]);
   room.isPaused = false;
   room.turnToken = (room.turnToken || 0) + 1;
   if (room.turnTimeout) { clearTimeout(room.turnTimeout); room.turnTimeout = null; }
@@ -2354,12 +2586,19 @@ function moveToNextPlayer(roomId) {
   let safety = 0;
   while (safety < room.players.length) {
     const cur = room.players[room.activePlayerIndex];
-    if (cur && (cur.online || cur.isBot) && !cur.hoosgale) break;
+    // Qof offline ah ha laga boodin isla markiiba. Timer-ku ha siiyo
+    // saddex fursadood; markaas oo keliya ayaa bot loo beddelayaa.
+    if (cur && !cur.hoosgale) break;
     room.activePlayerIndex = (room.activePlayerIndex + 1) % room.players.length;
     safety++;
   }
   const next = room.players[room.activePlayerIndex];
-  room.players.forEach(p => { p.hasActioned = false; p.pickedFromDiscard = false; p.lastPickedCardId = null; });
+  room.players.forEach(p => {
+    p.hasActioned = false;
+    p.turnDrewCard = false;
+    p.pickedFromDiscard = false;
+    p.lastPickedCardId = null;
+  });
   startTurnTimer(roomId);
   if (next && !next.isBot) io.to(next.id).emit('yourTurn');
 }
@@ -2393,6 +2632,7 @@ function doBotTurn(roomId, botId) {
 
   refillStockIfEmpty(roomId);
   let drewFromDiscard = false;
+  bot.turnDrewCard = false;
 
   if (room.discardPile.length > 0 && !bot.isOpened) {
     const topDiscard = room.discardPile[room.discardPile.length - 1];
@@ -2405,7 +2645,10 @@ function doBotTurn(roomId, botId) {
       room.discardPile.pop();
       const newCard = { ...topDiscard, fromDiscard: true };
       bot.hand.push(newCard);
-      bot.hasActioned = true; bot.pickedFromDiscard = true; bot.lastPickedCardId = newCard.id;
+      bot.hasActioned = true;
+      bot.turnDrewCard = true;
+      bot.pickedFromDiscard = true;
+      bot.lastPickedCardId = newCard.id;
       bot.dabaaqProviderId = room.lastProviderId || null;
       io.to(roomId).emit('updateDiscardPile', room.discardPile[room.discardPile.length - 1] ?? null);
       io.to(roomId).emit('botPickedDiscard', { botName: bot.name });
@@ -2413,9 +2656,16 @@ function doBotTurn(roomId, botId) {
     }
   }
 
-  if (!drewFromDiscard && room.stockPile.length > 0) {
+  // Ciyaaryahanka koowaad wuxuu ku bilaabmaa 15 kaar si uu mid u tuuro.
+  // Ha siin kaar 16aad, hana u oggolaan inuu koox dhigo isaga oo aan
+  // qaadasho samayn.
+  if (!drewFromDiscard && bot.hand.length < 15 && room.stockPile.length > 0) {
     const card = room.stockPile.pop();
-    bot.hand.push(card); bot.hasActioned = true; bot.pickedFromDiscard = false; bot.lastPickedCardId = null;
+    bot.hand.push(card);
+    bot.hasActioned = true;
+    bot.turnDrewCard = true;
+    bot.pickedFromDiscard = false;
+    bot.lastPickedCardId = null;
     io.to(roomId).emit('updateStockCount', room.stockPile.length);
   }
   updateRoomPlayers(roomId);
@@ -2426,7 +2676,10 @@ function doBotTurn(roomId, botId) {
     const totalScore = groups.flat().reduce((s, c) => s + getCardPoints(c.value), 0);
     const hasFourPlus = groups.some(g => g.length >= 4);
 
-    if (!bot.isOpened) {
+    if (!bot.turnDrewCard) {
+      // 15-kaarka bilowga ah waxaa loo isticmaali karaa oo keliya in
+      // laga tuuro kaar; degis/addition wuxuu u baahan yahay qaadasho.
+    } else if (!bot.isOpened) {
       const pickedDiscardMustBeUsed =
         bot.pickedFromDiscard && bot.lastPickedCardId
           ? cardIsInGroups(groups, bot.lastPickedCardId)
@@ -2556,7 +2809,21 @@ function startTurnTimer(roomId) {
     const cur = room.players[room.activePlayerIndex];
     if (!cur || cur.id !== player.id) return;
 
-     if (cur.isOpened) {
+     const becamePermanentBot = convertTimedOutPlayerToBot(roomId, cur);
+     if (!becamePermanentBot) {
+       // Inta aan saddexda timeout la gaarin, robotku hal door ayuu
+       // ciyaarayaa si uu fursad ugu helo dhisid, degis ama xirid.
+       cur.isBot = true;
+       cur.timeoutAsBot = true;
+     }
+     io.to(roomId).emit(
+       'notification',
+       `⏱️ ${cur.name} waqtigiisu wuu dhammaaday (${cur.timeoutStreak}/${HUMAN_TIMEOUTS_BEFORE_BOT}). Robotku wuu sii ciyaarayaa.`
+     );
+     scheduleBotTurn(roomId, cur.id);
+     return;
+
+      if (false && cur.isOpened) {
        if (cur.pickedFromDiscard && cur.lastPickedCardId) {
          const returnedCard = returnPickedDiscard(room, cur);
          if (returnedCard) {
@@ -2727,6 +2994,7 @@ function startGame(roomId) {
     if (!p.isBot) {
       io.to(p.id).emit('matchFound', {
         roomId,
+        roomNumber: room.roomNumber,
         topDiscard,
         currentTurn: firstPlayer.id
       });
@@ -2770,7 +3038,10 @@ function addBotsAndStartGame(roomId) {
   for (let i = 0; i < needed; i++) {
     const botId = `bot_${Math.random().toString(36).slice(2, 9)}`;
     room.players.push({ id: botId, name: botNames[i], hand: [], isOpened: false, hasActioned: false, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: true, hoosgale: false, openProviderId: null, sessionToken: null, disconnectedAt: null, profileName: null });
-    io.to(roomId).emit('waitingRoomUpdate', { players: room.players.map(p => ({ name: p.name, isBot: p.isBot })) });
+    io.to(roomId).emit('waitingRoomUpdate', {
+      players: room.players.map(p => ({ name: p.name, isBot: p.isBot })),
+      roomNumber: room.roomNumber
+    });
   }
   setTimeout(() => { room._botsAdding = false; startGame(roomId); }, 1500);
 }
@@ -2778,6 +3049,30 @@ function addBotsAndStartGame(roomId) {
 // ─── Socket events ────────────────────────────────────────────────────────────
 io.on('connection', socket => {
   let myRoomId = '';
+  // IP-ga gudaha LAN-ka lama aqoonsan karo. Browser-ku wuxuu marka uu
+  // joinRandom diro publicIp si dalka dhabta ah loo raadiyo.
+  socket.playerData = {
+    country: getClientCountry(socket),
+  };
+
+  socket.on('setOnlineProfile', data => {
+    const name = String(data?.name || '').trim().slice(0, 80);
+    if (!name) return;
+
+    const publicIp = String(data?.publicIp || '').trim();
+    if (publicIp) socket.playerData.country = getClientCountry(socket, publicIp);
+
+    onlineProfiles.set(socket.id, {
+      socketId: socket.id,
+      name,
+      country: socket.playerData.country || 'XX',
+    });
+    broadcastOnlineUsers();
+  });
+
+  socket.on('clearOnlineProfile', () => {
+    if (onlineProfiles.delete(socket.id)) broadcastOnlineUsers();
+  });
 
   socket.on('sendChat', message => {
     const room = rooms[myRoomId];
@@ -2799,16 +3094,34 @@ io.on('connection', socket => {
     const incomingToken = typeof data === 'string' ? null : data.token;
     const profileName = typeof data === 'string' ? null : (data.profileName || null);
     const xiiliTarget = typeof data === 'string' ? 5 : (parseInt(data.xiiliTarget) || 5);
+    const publicIp = typeof data === 'string' ? '' : String(data.publicIp || '').trim();
+    if (publicIp) socket.playerData.country = getClientCountry(socket, publicIp);
 
     for (const id in rooms) {
       const room = rooms[id];
-      const existing = room.players.find(p => p.name === name && !p.online && !p.isBot);
+    const existing = room.players.find(p =>
+      p.name === name &&
+      !p.online &&
+      (!p.isBot || p.autoBot)
+    );
       if (existing) {
         const tokenMatches = incomingToken && existing.sessionToken && incomingToken === existing.sessionToken;
         const isRecent = existing.disconnectedAt !== null && Date.now() - existing.disconnectedAt < RECONNECT_WINDOW_MS;
         if (tokenMatches && isRecent) {
           const oldId = existing.id;
-          existing.id = socket.id; existing.online = true; existing.disconnectedAt = null;
+          const wasAutoBot = Boolean(existing.autoBot);
+          existing.id = socket.id;
+          existing.online = true;
+          existing.disconnectedAt = null;
+           existing.country = socket.playerData?.country || existing.country || 'XX';
+          // Haddii timeout-ku bot ka dhigay, reconnect-ku wuxuu dib ugu
+          // celinayaa ciyaaryahanka dhabta ah isaga oo isla gacantii wata.
+          if (existing.autoBot) {
+            existing.isBot = false;
+            existing.autoBot = false;
+            existing.autoBotAt = null;
+            existing.timeoutStreak = 0;
+          }
           if (room.firstOpenerId === oldId) room.firstOpenerId = socket.id;
           myRoomId = id; socket.join(id);
           socket.emit('sessionToken', existing.sessionToken);
@@ -2816,21 +3129,44 @@ io.on('connection', socket => {
           if (room.discardPile.length > 0) socket.emit('updateDiscardPile', room.discardPile[room.discardPile.length - 1]);
           broadcastTableUI(id);
           const cur = room.players[room.activePlayerIndex];
-          socket.emit('matchFound', { roomId: id, topDiscard: room.discardPile[room.discardPile.length - 1], currentTurn: cur ? cur.id : null });
+          socket.emit('matchFound', {
+            roomId: id,
+            roomNumber: room.roomNumber,
+            topDiscard: room.discardPile[room.discardPile.length - 1],
+            currentTurn: cur ? cur.id : null
+          });
           updateRoomPlayers(id);
+           broadcastOnlineUsers();
           socket.emit('notification', 'Waad ku soo laabtay!');
           broadcastSessionScores(id);
-          if (room.gameStarted && cur && cur.isBot && !room.turnTimeout && !room.isPaused) scheduleBotTurn(id, cur.id);
+          if (room.gameStarted && wasAutoBot && cur && cur.id === socket.id && !room.isPaused) {
+            // Haddii bot-ku hadda ku jiray doorka, jooji timer-kii bot-ka
+            // oo u bilow timer-ka qofka soo laabtay.
+            if (room.turnTimeout) clearTimeout(room.turnTimeout);
+            room.turnTimeout = null;
+            room.turnToken = (room.turnToken || 0) + 1;
+            startTurnTimer(id);
+          } else if (room.gameStarted && cur && cur.isBot && !room.turnTimeout && !room.isPaused) {
+            scheduleBotTurn(id, cur.id);
+          }
           return;
         }
       }
     }
 
-    let rid = Object.keys(rooms).find(id => rooms[id].players.length < 4 && !rooms[id].gameStarted);
+    // Room game-over ah ha lagu darin ciyaar cusub oo random ah.
+    // Ciyaartoydii hore waxay isla room-ka uga sii gudbi karaan ciyaarta
+    // xigta iyagoo adeegsanaya forceResetGame, si session scores-ku u sii jiraan.
+    let rid = Object.keys(rooms).find(id =>
+      rooms[id].players.length < 4 &&
+      !rooms[id].gameStarted &&
+      !rooms[id].historyRecorded
+    );
     if (!rid) {
       rid = 'Room_' + Math.random().toString(36).slice(2, 11);
       rooms[rid] = {
         id: rid, players: [], gameStarted: false, stockPile: [], discardPile: [],
+        roomNumber: allocateRoomNumber(),
         activePlayerIndex: 0, lastOpenPoints: 101, turnTimeout: null, turnStartTime: null,
         lastProviderId: null, botFillTimer: null, isPaused: false, pauseTimeLeft: 0,
         turnToken: 0, hasFirstOpened: false, firstOpenerId: null, firstOpenerOriginalPoints: null,
@@ -2838,6 +3174,7 @@ io.on('connection', socket => {
         playerStats: {}, moveHistory: [],
         dabaaqPairs: [], activeDabaaqPairs: [],
         sessionScores: {},
+        sessionId: allocateXiiliSessionId(),
         xiiliTarget: xiiliTarget,
         historyRecorded: false,
       };
@@ -2849,10 +3186,14 @@ io.on('connection', socket => {
     if (!room.gameStarted && room.players.length === 0) {
       room.xiiliTarget = xiiliTarget;
     }
-    room.players.push({ id: socket.id, name: name || `User_${socket.id.slice(0, 4)}`, hand: [], isOpened: false, hasActioned: false, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: false, hoosgale: false, openProviderId: null, sessionToken, disconnectedAt: null, profileName: profileName || null });
+     room.players.push({ id: socket.id, name: name || `User_${socket.id.slice(0, 4)}`, hand: [], isOpened: false, hasActioned: false, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: false, autoBot: false, autoBotAt: null, timeoutStreak: 0, hoosgale: false, openProviderId: null, sessionToken, disconnectedAt: null, profileName: profileName || null, country: socket.playerData?.country || 'XX' });
     socket.join(rid); myRoomId = rid;
     socket.emit('sessionToken', sessionToken);
-    io.to(rid).emit('waitingRoomUpdate', { players: room.players.map(p => ({ name: p.name, isBot: p.isBot })) });
+     broadcastOnlineUsers();
+    io.to(rid).emit('waitingRoomUpdate', {
+      players: room.players.map(p => ({ name: p.name, isBot: p.isBot })),
+      roomNumber: room.roomNumber
+    });
     broadcastSessionScores(rid);
 
     if (room.players.length === 4) {
@@ -2892,7 +3233,12 @@ io.on('connection', socket => {
     refillStockIfEmpty(myRoomId);
     if (room.stockPile.length > 0) {
       const card = room.stockPile.pop();
-      p.hand.push(card); p.hasActioned = true; p.pickedFromDiscard = false; p.lastPickedCardId = null;
+      p.hand.push(card);
+      p.hasActioned = true;
+      p.turnDrewCard = true;
+      p.pickedFromDiscard = false;
+      p.lastPickedCardId = null;
+       recordHumanAction(p);
       socket.emit('receiveCard', card);
       io.to(myRoomId).emit('updateStockCount', room.stockPile.length);
       updateRoomPlayers(myRoomId);
@@ -2914,7 +3260,12 @@ io.on('connection', socket => {
         if (!room.moveHistory) room.moveHistory = [];
         room.moveHistory.push({ playerId: p.id, playerName: p.name, card: `${card.suit}${card.value}`, fromId: providerId, time: Date.now() });
       }
-      p.hand.push(card); p.hasActioned = true; p.pickedFromDiscard = true; p.lastPickedCardId = card.id;
+      p.hand.push(card);
+      p.hasActioned = true;
+      p.turnDrewCard = true;
+      p.pickedFromDiscard = true;
+      p.lastPickedCardId = card.id;
+       recordHumanAction(p);
       p.dabaaqProviderId = providerId || null;
       socket.emit('discardPickedSuccess', { card });
       socket.emit('updateHand', { hand: p.hand });
@@ -2937,7 +3288,10 @@ io.on('connection', socket => {
     }
     const top = p.hand.splice(cardIdx, 1)[0];
     room.discardPile.push(top);
-    p.hasActioned = false; p.pickedFromDiscard = false; p.lastPickedCardId = null;
+    p.hasActioned = false;
+    p.turnDrewCard = false;
+    p.pickedFromDiscard = false;
+    p.lastPickedCardId = null;
     p.dabaaqProviderId = null;
     socket.emit('updateHand', { hand: p.hand });
     io.to(myRoomId).emit('updateDiscardPile', top);
@@ -2973,6 +3327,7 @@ io.on('connection', socket => {
     if (room.turnTimeout) { clearTimeout(room.turnTimeout); room.turnTimeout = null; }
     room.turnToken = (room.turnToken || 0) + 1;
     const discarded = p.hand.splice(idx, 1)[0];
+    recordHumanAction(p);
     room.discardPile.push(discarded);
     io.to(myRoomId).emit('updateDiscardPile', discarded);
     socket.emit('updateHand', { hand: p.hand });
@@ -3005,6 +3360,11 @@ io.on('connection', socket => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
     const p = room.players[room.activePlayerIndex];
     if (!p || p.id !== socket.id) { socket.emit('notification', 'Sug doorkaaga ka hor inta aadan degin!'); return; }
+    if (!p.turnDrewCard) {
+      socket.emit('notification', '❌ Marka hore kaar ka qaado xabadka ama tuurista, kadib ayaad degi kartaa.');
+      socket.emit('meldRejected', { hand: p.hand });
+      return;
+    }
     if (p.isOpened && !data.isAdditional) { socket.emit('notification', 'Horey ayaad u furatay ciyaarta!'); return; }
 
     const requestedSets = Array.isArray(data?.sets) ? data.sets : [];
@@ -3026,6 +3386,8 @@ io.on('connection', socket => {
       socket.emit('meldRejected', { hand: p.hand });
       return;
     }
+
+    recordHumanAction(p);
 
     const lagaMaMaarmaan = getOpeningMinimum(room);
     
@@ -3109,6 +3471,11 @@ io.on('connection', socket => {
   socket.on('addToExistingSets', (data) => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
     const p = room.players.find(pl => pl.id === socket.id); if (!p || !p.isOpened) return;
+    if (!p.turnDrewCard) {
+      socket.emit('notification', '❌ Marka hore kaar ka qaado xabadka ama tuurista, kadib ayaad miiska ku dari kartaa.');
+      socket.emit('meldRejected', { hand: p.hand });
+      return;
+    }
 
     const requestedCards = Array.isArray(data?.cards) ? data.cards : [];
     if (p.pickedFromDiscard && p.lastPickedCardId &&
@@ -3124,6 +3491,8 @@ io.on('connection', socket => {
       socket.emit('notification', '❌ Kaar ka mid ah kuwa aad dooratay kuma dari karo koox miiska saaran.');
       return;
     }
+
+    recordHumanAction(p);
 
     cardsToAdd.forEach(card => {
       room.players.forEach(player => {
@@ -3150,10 +3519,15 @@ io.on('connection', socket => {
     broadcastTableUI(myRoomId); updateRoomPlayers(myRoomId);
   });
   
-  socket.on('syncHandAfterMeld', (hand) => {
+  socket.on('syncHandAfterMeld', () => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
     const p = room.players.find(pl => pl.id === socket.id); if (!p) return;
-    p.hand = hand; updateRoomPlayers(myRoomId);
+    // Client-ku ma noqon karo isha hand-ka saxda ah; meldSets iyo
+    // addToExistingSets ayaa server-ka ka saara kaararka kadib validation.
+    // Haddii legacy client uu event-kan diro, u dir hand-ka authoritative-ka
+    // halkii uu server-ka ugu qori lahaa xog optimistic ah.
+    socket.emit('updateHand', { hand: p.hand });
+    updateRoomPlayers(myRoomId);
   });
 
   socket.on('resetMyOpenedCards', () => {
@@ -3172,8 +3546,20 @@ io.on('connection', socket => {
     }
   });
 
-  socket.on('forceResetGame', () => {
-    const room = rooms[myRoomId]; if (!room) return;
+  socket.on('forceResetGame', (ack) => {
+    const respond = result => {
+      if (typeof ack === 'function') ack(result);
+    };
+    const room = rooms[myRoomId];
+    if (!room) {
+      respond({ ok: false, reason: 'not-in-room' });
+      return;
+    }
+    if (room.resetPending) {
+      respond({ ok: true, pending: true });
+      return;
+    }
+    room.resetPending = true;
     if (room.cleanupTimer) { clearTimeout(room.cleanupTimer); room.cleanupTimer = null; }
     room.gameStarted = false; room.stockPile = []; room.discardPile = [];
     room.turnToken = 0; room.hasFirstOpened = false; room.firstOpenerId = null;
@@ -3182,14 +3568,23 @@ io.on('connection', socket => {
     if (room.turnTimeout) { clearTimeout(room.turnTimeout); room.turnTimeout = null; }
     room.players.forEach(resetPlayerState);
     io.to(myRoomId).emit('notification', '⚠️ Ciyaartu dib ayay u bilaabanaysaa...');
-    setTimeout(() => startGame(myRoomId), 2000);
+    setTimeout(() => {
+      const currentRoom = rooms[myRoomId];
+      if (!currentRoom || currentRoom !== room) {
+        respond({ ok: false, reason: 'room-gone' });
+        return;
+      }
+      room.resetPending = false;
+      startGame(myRoomId);
+      respond({ ok: true });
+    }, 2000);
   });
 
   socket.on('startNewSeason', () => {
     const room = rooms[myRoomId];
     const target = room ? room.xiiliTarget : 5;
-    resetXiiliSession(target);
     if (room) {
+      resetXiiliSession(room, target);
       attachRoomToXiiliSession(room, target);
       broadcastSessionScores(myRoomId);
     }
@@ -3254,30 +3649,57 @@ io.on('connection', socket => {
         }
       }
     }
-    socket.leave(myRoomId); myRoomId = '';
+     broadcastOnlineUsers();
+     socket.leave(myRoomId); myRoomId = '';
   });
 
   socket.on('disconnect', () => {
+    onlineProfiles.delete(socket.id);
+    broadcastOnlineUsers();
     const room = rooms[myRoomId]; if (!room) return;
     const pidx = room.players.findIndex(p => p.id === socket.id); if (pidx === -1) return;
     const player = room.players[pidx];
-    if (!room.gameStarted) {
+    if (!room.gameStarted && room.historyRecorded) {
+      // Game-over room-ka ha laga saarin ciyaartoyga; browser-ku wuu
+      // xirnaan karaa ka hor inta uusan riixin SII WAD CIYAARTA.
+      player.online = false;
+      player.disconnectedAt = Date.now();
+      broadcastOnlineUsers();
+    } else if (!room.gameStarted) {
       room.players = room.players.filter(p => p.id !== socket.id);
       if (room.botFillTimer && room.players.length === 0) { clearTimeout(room.botFillTimer); room.botFillTimer = null; }
+      broadcastOnlineUsers();
     } else {
       player.online = false; player.disconnectedAt = Date.now();
-      if (room.activePlayerIndex === pidx) {
-        if (room.turnTimeout) clearTimeout(room.turnTimeout);
-        moveToNextPlayer(myRoomId);
+      const becameBot = convertDisconnectedPlayerToBot(myRoomId, player);
+
+      /*
+       * Haddii qofku hadda ciyaarayay, timeout-kii qofka ha sii wadin.
+       * Bot-turn cusub ku bilow token cusub; haddii uusan isagu turn-ka
+       * hayn, startTurnTimer() ayaa bot-ka qabanaya marka turn-ku gaaro.
+       */
+      if (becameBot && room.activePlayerIndex === pidx) {
+        if (room.turnTimeout) {
+          clearTimeout(room.turnTimeout);
+          room.turnTimeout = null;
+        }
+        room.turnToken = (room.turnToken || 0) + 1;
+        scheduleBotTurn(myRoomId, player.id);
       }
+      broadcastOnlineUsers();
     }
     const online = room.players.filter(p => p.online || p.isBot).length;
-    if (online === 0) { if (room.turnTimeout) clearTimeout(room.turnTimeout); delete rooms[myRoomId]; }
+    if (online === 0 && !room.historyRecorded) {
+      if (room.turnTimeout) clearTimeout(room.turnTimeout);
+      delete rooms[myRoomId];
+    }
     else updateRoomPlayers(myRoomId);
   });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
+// Ku xir dhammaan network interfaces si telefoonka isla Wi‑Fi-ga ku jira
+// uu uga geli karo kombiyuutarka, ma aha localhost oo keliya.
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Turubka 101 ✅ wuxuu ku shaqeynayaa port ${PORT}`);
 });

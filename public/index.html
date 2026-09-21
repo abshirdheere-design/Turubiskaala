@@ -8,15 +8,16 @@
 </head>
 <body>
 
-<!-- History shortcut: keep the setup area clean and place it like the Fooro panel. -->
-<div class="history-corner-control">
-  <button id="btn-open-winner-history" class="btn-history-open" type="button">
-    🏆 Taariikhda ciyaaraha
-  </button>
-</div>
-
 <!-- ─── 1. SETUP & AUTH SCREEN ─────────────────────────────────────────── -->
 <div id="setup-screen" class="screen active">
+  <!-- History shortcut: wuxuu ku jiraa setup-ka oo keliya,
+       si uusan ugu dul dhicin game header-ka ama footer-ka. -->
+  <div class="history-corner-control">
+    <button id="btn-open-winner-history" class="btn-history-open" type="button">
+      🏆 Taariikhda ciyaaraha
+    </button>
+  </div>
+
   <div class="setup-center">
     <div class="logo-block">
       <div class="logo-title">TURUBKA</div>
@@ -34,8 +35,11 @@
 
     <!-- ─── Persistent Score Auth Section ─────────────────────────────── -->
     <div class="auth-section">
-      <div class="auth-divider"><span>Dhibcaha Xifidinta</span></div>
+      <div class="auth-divider"><span>Stats-ka Profile-ka (dhammaan ciyaaraha)</span></div>
       <div id="auth-status" class="auth-status"></div>
+      <p class="auth-profile-note">
+        Isdiiwaangali haddii aad rabto diiwaangelinta dhibcaha.
+      </p>
       <div id="auth-login-area" class="auth-login-area">
         <div class="auth-row">
           <input id="auth-name-input" type="text" placeholder="Magacaaga..." maxlength="15" autocomplete="off" class="auth-input" />
@@ -78,6 +82,7 @@
     </div>
 
     <h2 class="waiting-title">Raadinta Ciyaartooyda...</h2>
+    <div id="waiting-room-label" class="room-label">Qolka —</div>
     <div class="waiting-count" id="waiting-count">Sugaya... (0/4)</div>
     <div id="waiting-list"></div>
     <p class="waiting-note">Ciyaartu waxay bilaabataa markii 4 qof la helayo</p>
@@ -101,11 +106,25 @@
     <div class="header-left">
       <span class="online-dot">●</span>
       <span id="hdr-name" class="gold bold"></span>
+       <span id="hdr-room-label" class="room-label">Qolka —</span>
       <span id="hdr-opened-badge" class="badge-opened hidden">&#x2B05; Degay</span>
+      <div id="hdr-online-users" class="hdr-online-users">
+        <button id="hdr-online-toggle" class="hdr-online-toggle" type="button" aria-expanded="false" aria-controls="hdr-online-popover">
+          <span class="online-dot">●</span>
+          <span id="hdr-online-count">0 online</span>
+        </button>
+        <div id="hdr-online-popover" class="hdr-online-popover hidden">
+          <div class="hdr-online-title">
+            <span>Dadka toos ugu jira</span>
+            <span id="hdr-online-total">0</span>
+          </div>
+          <div id="hdr-online-list" class="hdr-online-list"></div>
+        </div>
+      </div>
     </div>
     <div id="hdr-turn" class="hdr-turn-idle">Sugaya...</div>
     <div class="header-right">
-      <span class="bold header-score-value" id="hdr-score" aria-live="polite">0</span>
+       <span class="bold header-score-value" id="hdr-score" aria-live="polite" title="Score-ka session-ka miiska hadda">Dhibco: 0</span>
       <button id="btn-game-history" class="btn-history-icon" type="button" title="Fur taariikhda ciyaaraha" aria-label="Fur taariikhda ciyaaraha">🏆</button>
       <button id="btn-exit" onclick="exitGame()">Ka bax</button>
     </div>
@@ -178,11 +197,11 @@
 
       <!-- Leaderboard -->
       <div id="modal-leaderboard-wrap" class="modal-leaderboard-wrap hidden">
-        <div class="modal-lb-title">🏆 Jadwalka Dhibcaha</div>
+        <div class="modal-lb-title">🏆 Jadwalka Dhibcaha Xilliga</div>
         <div id="modal-leaderboard" class="modal-lb-body"></div>
       </div>
 
-      <button onclick="exitGame()" class="btn-restart">Ciyaar Cusub</button>
+      <button onclick="startNextGame()" class="btn-restart">SII WAD CIYAARTA</button>
     </div>
   </div>
 
@@ -243,6 +262,7 @@
 <script src="/script.js"></script>
 <script>
 function exitGame() {
+  window.t101SkipResumeSave = true;
   if (typeof socket !== 'undefined' && socket) socket.emit('leaveGame');
   sessionStorage.removeItem('t101_token');
   location.reload();
