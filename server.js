@@ -435,7 +435,7 @@ function firstBatuuto(players, winnerId = null) {
     })[0] || null;
 }
 
-function findFooroTarget(winnerId, providerId, players) {
+function findFooroResolution(winnerId, providerId, players) {
   /*
    * Foorada iyo Dabaaqdu waxay ku xiran yihiin qofkii kaarka tuuray.
    * Fooradu ma wareegi karto qof kale sababtoo ah provider-ku hore ayuu
@@ -451,7 +451,12 @@ function findFooroTarget(winnerId, providerId, players) {
   // dhacaysaa kii ugu horreeyay ee galay Batuutada, ma aha kii ugu dambeeyay
   // ama qofka ku horreeya array-ga players.
   const hoosgale = firstBatuuto(players, winnerId);
-  if (hoosgale) return hoosgale.id;
+  if (hoosgale) {
+    return {
+      targetId: hoosgale.id,
+      escapedProviderNames: [],
+    };
+  }
 
   const canReceiveFooro = candidate =>
     candidate &&
@@ -460,6 +465,20 @@ function findFooroTarget(winnerId, providerId, players) {
     !candidate.isCleared &&
     !candidate.hasPassed;
 
+  const escapedProviderNames = [];
+  const rememberEscapedProvider = candidate => {
+    if (!candidate?.isOpened) return;
+    const name = String(candidate.name || '').trim();
+    if (
+      name &&
+      !escapedProviderNames.some(
+        existing => normalizeSessionName(existing) === normalizeSessionName(name)
+      )
+    ) {
+      escapedProviderNames.push(name);
+    }
+  };
+
   if (providerId && providerId !== winnerId) {
     const provider = players.find(p => p.id === providerId);
     /*
@@ -467,7 +486,13 @@ function findFooroTarget(winnerId, providerId, players) {
      * dhigi karo; markaas raadi qofka xiga ee aan degin. Tusaale ahaan:
      * Jaamac wuu degay, sidaas darteed Fooradu waxay ku dhacaysaa Abshir.
      */
-    if (canReceiveFooro(provider)) return provider.id;
+    if (canReceiveFooro(provider)) {
+      return {
+        targetId: provider.id,
+        escapedProviderNames,
+      };
+    }
+    rememberEscapedProvider(provider);
   }
 
   /*
@@ -481,11 +506,24 @@ function findFooroTarget(winnerId, providerId, players) {
     for (let step = 1; step <= players.length; step++) {
       const candidate =
         players[(directFallbackIndex - step + players.length) % players.length];
-      if (canReceiveFooro(candidate)) return candidate.id;
+      if (canReceiveFooro(candidate)) {
+        return {
+          targetId: candidate.id,
+          escapedProviderNames,
+        };
+      }
+      rememberEscapedProvider(candidate);
     }
   }
 
-  return null;
+  return {
+    targetId: null,
+    escapedProviderNames,
+  };
+}
+
+function findFooroTarget(winnerId, providerId, players) {
+  return findFooroResolution(winnerId, providerId, players).targetId;
 }
 
 function updatePersistentScores(room, scoreResult) {
@@ -620,6 +658,36 @@ function fooroOwnersFor(score, fallbackOwner = null) {
   return owners.slice(0, count);
 }
 
+/*
+ * Marka Fooro laga qaado qof, owner-ka tooska ah mararka qaar ma aha
+ * milkiilaha firfircoon ee wareeggaas. Tusaale:
+ *
+ *   Faarax  <- Abshir
+ *   Abshir  <- Jaamac
+ *
+ * Haddii Faarax laga qaado Foorada, sharaxaadda waa inay sheegtaa Jaamac
+ * oo ah milkiilaha xiga ee waqtigaas, ma aha Abshir oo ahaa owner-kii
+ * tooska ahaa ee hore.
+ */
+function nextActiveFooroOwner(ownerName, scoreMap, excludedNames = []) {
+  const directOwner = String(ownerName || '').trim();
+  if (!directOwner) return null;
+
+  const excluded = new Set(
+    excludedNames
+      .filter(Boolean)
+      .map(name => normalizeSessionName(name))
+  );
+  const directOwnerScore = scoreMap?.[normalizeSessionName(directOwner)];
+  const nextOwners = fooroOwnersFor(directOwnerScore);
+  const nextOwner = nextOwners.find(name => {
+    const key = normalizeSessionName(name);
+    return key && key !== normalizeSessionName(directOwner) && !excluded.has(key);
+  });
+
+  return nextOwner || directOwner;
+}
+
 function scoreNet(score) {
   return (Number(score?.wins) || 0) - (Number(score?.fooros) || 0);
 }
@@ -681,6 +749,58 @@ function sessionHasPreviousFooro(room) {
  * ciyaartu dhammaato, applyCorrectDabaaqScores() wuxuu hubinayaa winner-ka
  * iyo provider-ka dhabta ah.
  */
+/*
+ * Saddexda ciyaaryahan ee Dabaaqda waxay leeyihiin wareeg mudnaan leh:
+ *
+ *   Jaamac -> Faarax
+ *   Faarax -> Jimcaale
+ *   Jimcaale -> Jaamac
+ *
+ * Pairs-ka oo dhan waa in la kaydiyaa. Mudnaantan ayaa keliya go'aamisa
+ * pair-ka la qaadanayo marka qofku leeyahay laba ama ka badan oo negative
+ * ah. Sidaas darteed Faarax wuxuu ka horreeyaa Jimcaale marka labaduba
+ * Jaamac la Dabaaqayaan.
+ */
+const DABAAQ_CYCLE_EDGES = [
+  ['JAAMAC', 'FAARAX'],
+  ['FAARAX', 'JIMCAALE'],
+  ['JIMCAALE', 'JAAMAC'],
+];
+
+function orientDabaaqPair(pair) {
+  const firstKey = normalizeSessionName(pair?.player1);
+  const secondKey = normalizeSessionName(pair?.player2);
+  const edge = DABAAQ_CYCLE_EDGES.find(
+    ([from, to]) =>
+      (firstKey === from && secondKey === to) ||
+      (firstKey === to && secondKey === from)
+  );
+
+  if (!edge) return pair;
+
+  const namesByKey = new Map([
+    [firstKey, pair.player1],
+    [secondKey, pair.player2],
+  ]);
+
+  return {
+    ...pair,
+    player1: namesByKey.get(edge[0]) || pair.player1,
+    player2: namesByKey.get(edge[1]) || pair.player2,
+  };
+}
+
+function dabaaqPairOrder(pair) {
+  const firstKey = normalizeSessionName(pair?.player1);
+  const secondKey = normalizeSessionName(pair?.player2);
+  const edgeIndex = DABAAQ_CYCLE_EDGES.findIndex(
+    ([from, to]) =>
+      (firstKey === from && secondKey === to) ||
+      (firstKey === to && secondKey === from)
+  );
+  return edgeIndex === -1 ? DABAAQ_CYCLE_EDGES.length : edgeIndex;
+}
+
 function rebuildDabaaqPairsFromScores(room, season) {
   const players = Array.isArray(room?.players) ? room.players : [];
   const pairs = [];
@@ -729,8 +849,16 @@ function rebuildDabaaqPairsFromScores(room, season) {
    * xiiliga. Haddii laba room ay isku mar ciyaarayaan, season.dabaaqPairs
    * waxay keeni lahayd in miis A uu pair ka sameeyo qof miis B jooga.
    */
-  room.dabaaqPairs = pairs;
-  return pairs;
+  /*
+   * Ha lumin pairs-ka laba qof wadaagaan. Saddex qof oo negative ah
+   * waxay si sax ah u abuuri karaan saddexda isku-xir ee Dabaaqda.
+   * Ciyaartoyda aan ku jirin wareegga magacaaban waxay raacayaan kadib,
+   * iyagoo ilaalinaya order-ka ay ku jireen room.players.
+   */
+  room.dabaaqPairs = pairs
+    .map(orientDabaaqPair)
+    .sort((a, b) => dabaaqPairOrder(a) - dabaaqPairOrder(b));
+  return room.dabaaqPairs;
 }
 
 function initializeRoomScores(room, target = 5) {
@@ -781,9 +909,8 @@ function initializeRoomScores(room, target = 5) {
   }
 
   const players = Array.isArray(room.players) ? room.players : [];
-  // Rebuild pairs at the start of every new game. A saved list from the
-  // previous game can otherwise produce overlapping combinations such as
-  // A-B, A-C, and B-C.
+  // Rebuild pairs at the start of every new game. Overlapping combinations
+  // are intentional: A-B, A-C, and B-C may all be valid Dabaaq pairs.
   room.dabaaqPairs = [];
 
   // Ka raadi labo qof oo buuxiya shuruudda Dabaaq:
@@ -792,13 +919,11 @@ function initializeRoomScores(room, target = 5) {
   //
   // Qofka +1 leh ayaa qaadan kara +1 dheeraad ah iyo foorada
   // marka uu jiro ciyaaryahan kale oo leh +1 ama ka badan.
-  const used = new Set();
-
   for (let i = 0; i < players.length; i++) {
     const p1 = players[i];
     const key1 = normalizeSessionName(p1?.name);
 
-    if (!key1 || used.has(key1)) continue;
+    if (!key1) continue;
 
     const score1 = room.sessionScores[key1];
     if (!score1) continue;
@@ -811,7 +936,7 @@ function initializeRoomScores(room, target = 5) {
       const p2 = players[j];
       const key2 = normalizeSessionName(p2?.name);
 
-      if (!key2 || key2 === key1 || used.has(key2)) continue;
+      if (!key2 || key2 === key1) continue;
 
       const score2 = room.sessionScores[key2];
       if (!score2) continue;
@@ -865,10 +990,6 @@ function initializeRoomScores(room, target = 5) {
       // ciyaarta hadda bilaabanaysa, waxaana la isticmaalaa marka
       // ciyaartu dhammaato.
 
-      used.add(key1);
-      used.add(key2);
-
-      break;
     }
   }
 
@@ -890,8 +1011,6 @@ function initializeRoomScores(room, target = 5) {
       const net2 = scoreNet(score2);
       if (!key2 || net2 >= 0) continue;
 
-      if (used.has(key1) || used.has(key2)) continue;
-
       const dabaaqAmount = Math.min(Math.abs(net1), Math.abs(net2));
       room.dabaaqPairs.push({
         player1: p1.name,
@@ -900,14 +1019,11 @@ function initializeRoomScores(room, target = 5) {
         amount: dabaaqAmount,
         createdFrom: { player1Net: net1, player2Net: net2, dabaaqAmount }
       });
-      used.add(key1);
-      used.add(key2);
       console.log('🔴 DABAAQ TABAN LA SOO CELIYAY:', {
         player1: p1.name,
         player2: p2.name,
         amount: dabaaqAmount
       });
-      break;
     }
   }
 
@@ -1088,6 +1204,9 @@ function applyCorrectDabaaqScores(
       fooros: Number(score?.fooros) || 0,
     };
   };
+  const fooroTargetBefore = victimName
+    ? scoreSnapshot(victimName, beforeScores)
+    : null;
   /*
    * Haddii session-kii hore uusan hayn owner-ka foorada, ha ku qorin
    * guuleystaha si toos ah. Xaaladda uu guuleystuhu ka qaaday kaarka
@@ -1350,50 +1469,40 @@ function applyCorrectDabaaqScores(
      * ----------------------------------------------------------
      */
     if (dabaaqPair.type === 'positive_positive') {
-       const otherBefore = netOf(otherScore);
+      const otherBefore = netOf(otherScore);
 
-        /*
-         * Qofka +1 leh ayaa helaya +1 ciyaarta iyo +1 Dabaaq.
-         * Qofka kale dhibicdiisa Dabaaqda ayaa laga jarayaa hal.
-         * Sidaas darteed +1 -> 0; haddii uu +2 yahayna +2 -> +1.
-        *
-        * Tusaalaha saxda ah:
-        *   Jimcaale +1 -> +3
-        *   Abshir   +4 -> +3
-        */
-       if (winnerBefore > 0 && winnerBefore === otherBefore) {
-         // Tusaale +2/+2: guuleystaha +2 (guul) +2 (Dabaaq) = +5,
-         // qofka kale dhibcihiisa labada ahna waxaa loo celiyaa eber.
-         winnerAfter = winnerBefore + otherBefore + 1;
+      /*
+       * DABAAQ togan:
+       * - guuleystaha wuxuu helayaa +1 guusha iyo +1 DABAAQ = +2;
+       * - ciyaaryahanka kale hal dhibic ayaa laga jarayaa.
+       *
+       * Tusaale:
+       *   Jaamac  +2 -> +4
+       *   Faarax  +1 ->  0
+       *
+       * Xeerkan wuxuu sidoo kale daboolayaa tusaalaha +1/+4:
+       *   guuleystaha +1 -> +3
+       *   qofka kale +4 -> +3.
+       */
+      if (winnerBefore > 0 && otherBefore > 0) {
+        winnerAfter = winnerBefore + 2;
 
-         if (otherScore) {
-           scores[otherKey] = {
-             ...canonicalScore(0),
-             fooroOwners: [],
-             displayName: otherScore.displayName || otherName,
-           };
-         }
+        if (otherScore) {
+          const otherAfter = Math.max(0, otherBefore - 1);
+          scores[otherKey] = {
+            ...canonicalScore(otherAfter),
+            fooroOwners: fooroOwnersFor(otherScore).slice(
+              0,
+              Math.max(0, -otherAfter)
+            ),
+            displayName: otherScore.displayName || otherName,
+          };
+        }
 
-         positiveDabaaqApplied = true;
-       } else if (winnerBefore === 1 && otherBefore >= 1) {
-         winnerAfter = winnerBefore + 2;
-
-         if (otherScore) {
-             const otherAfter = Math.max(0, otherBefore - 1);
-            scores[otherKey] = {
-              ...canonicalScore(otherAfter),
-              fooroOwners: fooroOwnersFor(otherScore).slice(
-                0,
-                 Math.max(0, -otherAfter)
-              ),
-             displayName: otherScore.displayName || otherName,
-           };
-         }
-
-         positiveDabaaqApplied = true;
-       } else {
-         winnerAfter = winnerBefore + 1;
-       }
+        positiveDabaaqApplied = true;
+      } else {
+        winnerAfter = winnerBefore + 1;
+      }
 
       console.log('🟢 POSITIVE DABAAQ LA QAATAY:', {
         winner: winnerName,
@@ -1540,10 +1649,14 @@ function applyCorrectDabaaqScores(
         * Sidaas guushii hore uma sii qarinayso ciqaabta foorada.
         */
       fooroWasTransferred = transfersExistingFooro;
-      transferredFooroOwnerName =
-        transfersExistingFooro
-          ? winnerFooroOwners.shift() || winnerName
-          : winnerName;
+      if (transfersExistingFooro) {
+        const directOwner = winnerFooroOwners.shift() || winnerName;
+        transferredFooroOwnerName =
+          nextActiveFooroOwner(directOwner, beforeScores, [winnerName]) ||
+          directOwner;
+      } else {
+        transferredFooroOwnerName = winnerName;
+      }
 
       /*
         * Haddii Fooradu ugu noqoto milkiilihii hore, weli waa Fooro cusub
@@ -1686,6 +1799,10 @@ function applyCorrectDabaaqScores(
     fooroTransferorName: fooroWasTransferred ? winnerName : null,
     fooroWasTransferred,
     fooroReturnedToOwnerName,
+    fooroTargetBefore,
+    fooroTargetAfter: victimName
+      ? scoreSnapshot(victimName, scores)
+      : null,
   };
 }
 
@@ -1866,6 +1983,28 @@ function getCardValue(card) {
   return map[card.value] ?? parseInt(card.value);
 }
 
+function sortMeldCards(set) {
+  if (!Array.isArray(set)) return [];
+  const cards = [...set];
+  if (cards.length < 2) return cards;
+
+  const sameSuit = cards.every(card => card?.suit === cards[0]?.suit);
+  if (sameSuit) {
+    // A run is shown from highest to lowest: A, K, Q, J, 10 ... 6.
+    return cards.sort((a, b) => getCardValue(b) - getCardValue(a));
+  }
+
+  const sameValue = cards.every(card => card?.value === cards[0]?.value);
+  if (sameValue) {
+    const suitOrder = { '♠': 0, '♥': 1, '♦': 2, '♣': 3 };
+    return cards.sort(
+      (a, b) => (suitOrder[a.suit] ?? 99) - (suitOrder[b.suit] ?? 99)
+    );
+  }
+
+  return cards;
+}
+
 function isValidMeldSet(set) {
   if (!Array.isArray(set) || set.length < 3) return false;
 
@@ -2007,6 +2146,45 @@ function autoSplitIntoGroups(cards) {
   };
 
   return solve(0).groups;
+}
+
+function findStockOpeningPlan(cards) {
+  if (!Array.isArray(cards) || cards.length !== 15) {
+    return null;
+  }
+
+  let bestPlan = null;
+  cards.forEach(leftoverCard => {
+    const openingCards = cards.filter(card => card.id !== leftoverCard.id);
+    const groups = autoSplitIntoGroups(openingCards);
+    const groupedIds = new Set(groups.flat().map(card => card.id));
+
+    if (groupedIds.size !== 14 || groupedIds.size !== openingCards.length) {
+      return;
+    }
+
+    const totalScore = groups
+      .flat()
+      .reduce((score, card) => score + getCardPoints(card.value), 0);
+    const hasFourPlus = groups.some(group => group.length >= 4);
+    const candidate = {
+      groups,
+      leftoverCard,
+      totalScore,
+      hasFourPlus,
+    };
+
+    if (
+      !bestPlan ||
+      Number(candidate.hasFourPlus) > Number(bestPlan.hasFourPlus) ||
+      (candidate.hasFourPlus === bestPlan.hasFourPlus &&
+        candidate.totalScore > bestPlan.totalScore)
+    ) {
+      bestPlan = candidate;
+    }
+  });
+
+  return bestPlan;
 }
 
 function findPairs(cards) {
@@ -2184,7 +2362,7 @@ function pickAutoDiscard(room, cur) {
   };
 
   if (cur.pickedFromDiscard && cur.lastPickedCardId) {
-    // Kaarka tuurka la qaatay lama tuuri karo; waa in lagu daraa koox.
+    // Kaarka tuurista la ga qaatay lama tuuri karo; waa in lagu daraa koox.
     return null;
   }
 
@@ -2244,12 +2422,6 @@ function getOpeningMinimum(room) {
 function cardIsInGroups(groups, cardId) {
   return Array.isArray(groups) &&
     groups.some(group => Array.isArray(group) && group.some(card => card?.id === cardId));
-}
-
-function cardFitsAnyOpenedSet(room, card) {
-  return room.players.some(player =>
-    (player.openedSets || []).some(set => isCardMeelGale(card, [set]))
-  );
 }
 
 function resetPlayerState(p) {
@@ -2389,7 +2561,22 @@ function updateRoomPlayers(roomId) {
   const room = rooms[roomId]; if (!room) return;
   const active = room.players[room.activePlayerIndex];
   io.to(roomId).emit('playersUpdate', {
-    players: room.players.map(p => ({ id: p.id, name: p.name, cardCount: p.hand.length, isOpened: p.isOpened, online: p.online, points: p.points, isBot: p.isBot, hoosgale: p.hoosgale })),
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      cardCount: p.hand.length,
+      isOpened: p.isOpened,
+      online: p.online,
+      points: p.points,
+      isBot: p.isBot,
+      hoosgale: p.hoosgale,
+      turnDrewCard: !!p.turnDrewCard,
+      drewFromStock: !!p.drewFromStock,
+      lastDrawnCardId: p.lastDrawnCardId || null,
+      pickedFromDiscard: !!p.pickedFromDiscard,
+      lastPickedCardId: p.lastPickedCardId || null,
+      mustDiscardCardId: p.mustDiscardCardId || null,
+    })),
     stockCount: room.stockPile.length,
     currentTurnId: active ? active.id : null,
     turnStartTime: room.turnStartTime,
@@ -2444,7 +2631,13 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   room.activeDabaaqPairs = roundDabaaqPairs.map(pair => ({ ...pair }));
 
   const dabaaqProviderId = potentialWinner.dabaaqProviderId || potentialWinner.openProviderId || null;
-  const fooroTargetId = findFooroTarget(potentialWinner.id, dabaaqProviderId, room.players);
+  const fooroResolution = findFooroResolution(
+    potentialWinner.id,
+    dabaaqProviderId,
+    room.players
+  );
+  const fooroTargetId = fooroResolution.targetId;
+  const fooroProviderNames = fooroResolution.escapedProviderNames;
   const winnerPlayer = room.players.find(p => p.id === potentialWinner.id);
   const victimPlayer = fooroTargetId ? room.players.find(p => p.id === fooroTargetId) : null;
   const providerPlayer = dabaaqProviderId && dabaaqProviderId !== potentialWinner.id
@@ -2483,15 +2676,21 @@ function endGame(roomId, potentialWinner, extraData = {}) {
   const gameOverExplanation = explainGameOver({
     winnerName: potentialWinner.name,
     actionType: extraData.actionType || 'discard',
+    providerName: providerPlayer?.name || null,
+    fooroProviderNames,
+    providerOpened: providerPlayer?.isOpened === true,
     allBatuuto: isAllBatuutoFinish,
     fooroTargetName: victimPlayer?.name || null,
     fooroOwnerName: scoreResult.fooroOwnerName || null,
     fooroTransferorName: scoreResult.fooroTransferorName || null,
     fooroWasTransferred: scoreResult.fooroWasTransferred === true,
     fooroReturnedToOwnerName: scoreResult.fooroReturnedToOwnerName || null,
+     fooroTargetBefore: scoreResult.fooroTargetBefore || null,
+     fooroTargetAfter: scoreResult.fooroTargetAfter || null,
     hoosgaleName: hoosgalePlayer?.name || null,
     dabaaqType: scoreResult.dabaaqType || null,
     dabaaqPair: scoreResult.dabaaqPair || null,
+    dabaaqPairs: roundDabaaqPairs,
     roundDeltas,
     players: room.players.map(player => ({
       name: player.name,
@@ -2527,13 +2726,17 @@ function endGame(roomId, potentialWinner, extraData = {}) {
     fooroTransferorName: scoreResult.fooroTransferorName || null,
     fooroWasTransferred: scoreResult.fooroWasTransferred === true,
     fooroReturnedToOwnerName: scoreResult.fooroReturnedToOwnerName || null,
+     fooroTargetBefore: scoreResult.fooroTargetBefore || null,
+     fooroTargetAfter: scoreResult.fooroTargetAfter || null,
     hoosgaleId: hoosgalePlayer?.id || null,
     hoosgaleName: hoosgalePlayer?.name || null,
     dabaaqType: scoreResult.dabaaqType || null,
     dabaaqPair: scoreResult.dabaaqPair || null,
+    dabaaqPairs: roundDabaaqPairs,
     sessionScores: getRoomVisibleScores(room),
     xiiliTarget: room.xiiliTarget || 5,
     providerId: dabaaqProviderId,
+    fooroProviderNames,
     actionType: extraData.actionType || 'discard',
     allBatuuto: isAllBatuutoFinish,
     gameOverExplanation,
@@ -2596,8 +2799,11 @@ function moveToNextPlayer(roomId) {
   room.players.forEach(p => {
     p.hasActioned = false;
     p.turnDrewCard = false;
+    p.drewFromStock = false;
+    p.lastDrawnCardId = null;
     p.pickedFromDiscard = false;
     p.lastPickedCardId = null;
+    p.mustDiscardCardId = null;
   });
   startTurnTimer(roomId);
   if (next && !next.isBot) io.to(next.id).emit('yourTurn');
@@ -2633,6 +2839,9 @@ function doBotTurn(roomId, botId) {
   refillStockIfEmpty(roomId);
   let drewFromDiscard = false;
   bot.turnDrewCard = false;
+  bot.drewFromStock = false;
+  bot.lastDrawnCardId = null;
+  bot.mustDiscardCardId = null;
 
   if (room.discardPile.length > 0 && !bot.isOpened) {
     const topDiscard = room.discardPile[room.discardPile.length - 1];
@@ -2647,6 +2856,8 @@ function doBotTurn(roomId, botId) {
       bot.hand.push(newCard);
       bot.hasActioned = true;
       bot.turnDrewCard = true;
+      bot.drewFromStock = false;
+      bot.lastDrawnCardId = null;
       bot.pickedFromDiscard = true;
       bot.lastPickedCardId = newCard.id;
       bot.dabaaqProviderId = room.lastProviderId || null;
@@ -2664,6 +2875,8 @@ function doBotTurn(roomId, botId) {
     bot.hand.push(card);
     bot.hasActioned = true;
     bot.turnDrewCard = true;
+    bot.drewFromStock = true;
+    bot.lastDrawnCardId = card.id;
     bot.pickedFromDiscard = false;
     bot.lastPickedCardId = null;
     io.to(roomId).emit('updateStockCount', room.stockPile.length);
@@ -2672,25 +2885,38 @@ function doBotTurn(roomId, botId) {
 
   setTimeout(() => {
     if (!room.gameStarted) return;
-    const groups = autoSplitIntoGroups([...bot.hand]);
+    const stockOpeningPlan =
+      bot.drewFromStock && !bot.isOpened
+        ? findStockOpeningPlan(bot.hand)
+        : null;
+    const groups = stockOpeningPlan?.groups || autoSplitIntoGroups([...bot.hand]);
     const totalScore = groups.flat().reduce((s, c) => s + getCardPoints(c.value), 0);
     const hasFourPlus = groups.some(g => g.length >= 4);
+    const groupedIds = new Set(groups.flat().map(card => card.id));
+    const canOpenAllStockCards =
+      Boolean(stockOpeningPlan) &&
+      groupedIds.size === bot.hand.length - 1;
 
     if (!bot.turnDrewCard) {
       // 15-kaarka bilowga ah waxaa loo isticmaali karaa oo keliya in
-      // laga tuuro kaar; degis/addition wuxuu u baahan yahay qaadasho.
+      // laga tuuro kaar; degis/ku daris wuxuu u baahan yahay qaadasho.
     } else if (!bot.isOpened) {
       const pickedDiscardMustBeUsed =
         bot.pickedFromDiscard && bot.lastPickedCardId
           ? cardIsInGroups(groups, bot.lastPickedCardId)
           : true;
-      if (totalScore >= getOpeningMinimum(room) && hasFourPlus && pickedDiscardMustBeUsed) {
+      const canOpen = bot.pickedFromDiscard
+        ? totalScore >= getOpeningMinimum(room) && hasFourPlus && pickedDiscardMustBeUsed
+        : canOpenAllStockCards && totalScore >= getOpeningMinimum(room) && hasFourPlus;
+      if (canOpen) {
         const ids = new Set(groups.flat().map(c => c.id));
         bot.hand = bot.hand.filter(c => !ids.has(c.id));
         if (bot.pickedFromDiscard) bot.openProviderId = bot.dabaaqProviderId || null;
+        if (canOpenAllStockCards) bot.mustDiscardCardId = bot.hand[0]?.id || null;
         bot.pickedFromDiscard = false;
         bot.lastPickedCardId = null;
-        bot.isOpened = true; bot.openedSets.push(...groups);
+        bot.drewFromStock = false;
+        bot.isOpened = true; bot.openedSets.push(...groups.map(sortMeldCards));
         if (!room.hasFirstOpened) {
           room.hasFirstOpened = true; room.firstOpenerId = bot.id;
           room.firstOpenerOriginalPoints = getPlayerOpenedPoints(bot);
@@ -2701,22 +2927,28 @@ function doBotTurn(roomId, botId) {
         recalculateRoomBarrier(room);
         broadcastTableUI(roomId); updateRoomPlayers(roomId);
         io.to(roomId).emit('notification', room.lastOpenPoints !== oldBarrier
-          ? `🤖 ${bot.name} ayaa furay! Minimum-ka dadka kale waa: ${room.lastOpenPoints}`
-          : `🤖 ${bot.name} ayaa furay!`);
+          ? `🤖 ${bot.name} ayaa degay! Uguyaraan dadka kale waa: ${room.lastOpenPoints}`
+          : `🤖 ${bot.name} ayaa degay!`);
 
         let mgDone = false;
         bot.hand = bot.hand.filter(card => {
           for (const pl of room.players) {
             for (const set of (pl.openedSets || [])) {
-              if (isCardMeelGale(card, [set])) { set.push(card); mgDone = true; return false; }
+               if (isCardMeelGale(card, [set])) {
+                 set.push(card);
+                 const orderedSet = sortMeldCards(set);
+                 set.splice(0, set.length, ...orderedSet);
+                 mgDone = true;
+                 return false;
+               }
             }
           }
           return true;
         });
         if (mgDone) { recalculateRoomBarrier(room); broadcastTableUI(roomId); updateRoomPlayers(roomId); }
       } else if (bot.pickedFromDiscard && bot.lastPickedCardId) {
-        // Haddii robot-ku uusan ku furmi karin kaarka tuurka, ma hayn karo
-        // kaarka mana tuuri karo kaar kale. Tuurka dib ugu celi oo doorka gudub.
+        // Haddii robot-ku uusan ku dagi karin kaarka tuurista, ma hayn karo
+        // kaarka mana tuuri karo kaar kale. Tuurista dib ugu celi oo doorka gudub.
         const returnedCard = returnPickedDiscard(room, bot);
         if (returnedCard) {
           io.to(roomId).emit('updateDiscardPile', returnedCard);
@@ -2731,8 +2963,8 @@ function doBotTurn(roomId, botId) {
       bot.lastPickedCardId &&
       !cardIsInGroups(groups, bot.lastPickedCardId)
     ) {
-      // Robot-ku ma dhamayn karo doorka isagoo kaarka tuurka iska haysta
-      // ama mid kale tuuraya; haddii uusan gelin koox, dib ha ugu celiyo tuurka.
+      // Robot-ku ma dhamayn karo doorka isagoo kaarka tuurista iska haysta
+      // ama mid kale tuuraya; haddii uusan gelin koox, dib ha ugu celiyo tuurista.
       const returnedCard = returnPickedDiscard(room, bot);
       if (returnedCard) {
         io.to(roomId).emit('updateDiscardPile', returnedCard);
@@ -2749,7 +2981,7 @@ function doBotTurn(roomId, botId) {
           bot.pickedFromDiscard = false;
           bot.lastPickedCardId = null;
         }
-        bot.openedSets.push(...groups);
+        bot.openedSets.push(...groups.map(sortMeldCards));
         const oldBarrier = room.lastOpenPoints;
         recalculateRoomBarrier(room);
         broadcastTableUI(roomId); updateRoomPlayers(roomId);
@@ -2760,7 +2992,13 @@ function doBotTurn(roomId, botId) {
       bot.hand = bot.hand.filter(card => {
         for (const pl of room.players) {
           for (const set of (pl.openedSets || [])) {
-            if (isCardMeelGale(card, [set])) { set.push(card); mgDone = true; return false; }
+             if (isCardMeelGale(card, [set])) {
+               set.push(card);
+               const orderedSet = sortMeldCards(set);
+               set.splice(0, set.length, ...orderedSet);
+               mgDone = true;
+               return false;
+             }
           }
         }
         return true;
@@ -2772,7 +3010,9 @@ function doBotTurn(roomId, botId) {
       if (!room.gameStarted) return;
       if (bot.hand.length === 0) { endGame(roomId, bot); return; }
 
-      const cardToDiscard = chooseBotDiscard(bot.hand, room, bot);
+      const cardToDiscard = bot.mustDiscardCardId
+        ? bot.hand.find(card => card.id === bot.mustDiscardCardId)
+        : chooseBotDiscard(bot.hand, room, bot);
       if (!cardToDiscard) { moveToNextPlayer(roomId); return; }
 
       const di = bot.hand.findIndex(c => c.id === cardToDiscard.id);
@@ -2780,6 +3020,7 @@ function doBotTurn(roomId, botId) {
 
       room.discardPile.push(cardToDiscard);
       io.to(roomId).emit('updateDiscardPile', cardToDiscard);
+      if (bot.mustDiscardCardId === cardToDiscard.id) bot.mustDiscardCardId = null;
 
       if (bot.hand.length === 0) { updateRoomPlayers(roomId); endGame(roomId, bot); return; }
 
@@ -3037,7 +3278,7 @@ function addBotsAndStartGame(roomId) {
   const needed = 4 - room.players.length;
   for (let i = 0; i < needed; i++) {
     const botId = `bot_${Math.random().toString(36).slice(2, 9)}`;
-    room.players.push({ id: botId, name: botNames[i], hand: [], isOpened: false, hasActioned: false, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: true, hoosgale: false, openProviderId: null, sessionToken: null, disconnectedAt: null, profileName: null });
+    room.players.push({ id: botId, name: botNames[i], hand: [], isOpened: false, hasActioned: false, turnDrewCard: false, drewFromStock: false, lastDrawnCardId: null, mustDiscardCardId: null, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: true, hoosgale: false, openProviderId: null, sessionToken: null, disconnectedAt: null, profileName: null });
     io.to(roomId).emit('waitingRoomUpdate', {
       players: room.players.map(p => ({ name: p.name, isBot: p.isBot })),
       roomNumber: room.roomNumber
@@ -3186,7 +3427,7 @@ io.on('connection', socket => {
     if (!room.gameStarted && room.players.length === 0) {
       room.xiiliTarget = xiiliTarget;
     }
-     room.players.push({ id: socket.id, name: name || `User_${socket.id.slice(0, 4)}`, hand: [], isOpened: false, hasActioned: false, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: false, autoBot: false, autoBotAt: null, timeoutStreak: 0, hoosgale: false, openProviderId: null, sessionToken, disconnectedAt: null, profileName: profileName || null, country: socket.playerData?.country || 'XX' });
+     room.players.push({ id: socket.id, name: name || `User_${socket.id.slice(0, 4)}`, hand: [], isOpened: false, hasActioned: false, turnDrewCard: false, drewFromStock: false, lastDrawnCardId: null, mustDiscardCardId: null, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: false, autoBot: false, autoBotAt: null, timeoutStreak: 0, hoosgale: false, openProviderId: null, sessionToken, disconnectedAt: null, profileName: profileName || null, country: socket.playerData?.country || 'XX' });
     socket.join(rid); myRoomId = rid;
     socket.emit('sessionToken', sessionToken);
      broadcastOnlineUsers();
@@ -3236,6 +3477,9 @@ io.on('connection', socket => {
       p.hand.push(card);
       p.hasActioned = true;
       p.turnDrewCard = true;
+      p.drewFromStock = true;
+      p.lastDrawnCardId = card.id;
+      p.mustDiscardCardId = null;
       p.pickedFromDiscard = false;
       p.lastPickedCardId = null;
        recordHumanAction(p);
@@ -3263,6 +3507,9 @@ io.on('connection', socket => {
       p.hand.push(card);
       p.hasActioned = true;
       p.turnDrewCard = true;
+      p.drewFromStock = false;
+      p.lastDrawnCardId = null;
+      p.mustDiscardCardId = null;
       p.pickedFromDiscard = true;
       p.lastPickedCardId = card.id;
        recordHumanAction(p);
@@ -3283,15 +3530,18 @@ io.on('connection', socket => {
     // kaar kale oo aan la xiriirin. Tani waxay ka ilaalisaa in "Soo Celi"
     // uu si khalad ah u tirtiro kaarka ugu dambeeya ee gacanta.
     if (cardIdx === -1) {
-      socket.emit('notification', 'Kaarkii tuurka la qaatay lama hayo; ma jiro kaar kale oo la soo celin karo.');
+      socket.emit('notification', 'Kaarkii tuurista la qaatay lama hayo; ma jiro kaar kale oo la soo celin karo.');
       return;
     }
     const top = p.hand.splice(cardIdx, 1)[0];
     room.discardPile.push(top);
     p.hasActioned = false;
     p.turnDrewCard = false;
+    p.drewFromStock = false;
+    p.lastDrawnCardId = null;
     p.pickedFromDiscard = false;
     p.lastPickedCardId = null;
+    p.mustDiscardCardId = null;
     p.dabaaqProviderId = null;
     socket.emit('updateHand', { hand: p.hand });
     io.to(myRoomId).emit('updateDiscardPile', top);
@@ -3304,7 +3554,11 @@ io.on('connection', socket => {
     const p = room.players[room.activePlayerIndex];
     if (!p || p.id !== socket.id) { socket.emit('notification', 'Sug doorkaaga!'); return; }
     if (p.pickedFromDiscard && p.lastPickedCardId) {
-      socket.emit('notification', '❌ Kaarka tuurka aad qaadatay marka hore ku dar koox miiska saaran.');
+      socket.emit('notification', '❌ Kaarka tuurista aad qaadatay marka hore ku dar koox miiska saaran.');
+      return;
+    }
+    if (p.mustDiscardCardId && card.id !== p.mustDiscardCardId) {
+      socket.emit('notification', '❌ Furitaanka stock-ga kadib waa inaad tuurtaa kaarka 15aad ee gacanta ku haray.');
       return;
     }
 
@@ -3331,6 +3585,7 @@ io.on('connection', socket => {
     room.discardPile.push(discarded);
     io.to(myRoomId).emit('updateDiscardPile', discarded);
     socket.emit('updateHand', { hand: p.hand });
+    if (p.mustDiscardCardId === discarded.id) p.mustDiscardCardId = null;
 
     if (p.hand.length === 0) { endGame(myRoomId, p); return; }
     room.lastProviderId = p.id;
@@ -3361,7 +3616,7 @@ io.on('connection', socket => {
     const p = room.players[room.activePlayerIndex];
     if (!p || p.id !== socket.id) { socket.emit('notification', 'Sug doorkaaga ka hor inta aadan degin!'); return; }
     if (!p.turnDrewCard) {
-      socket.emit('notification', '❌ Marka hore kaar ka qaado xabadka ama tuurista, kadib ayaad degi kartaa.');
+      socket.emit('notification', '❌ Marka hore kaar ka qaado qaadashada ama tuurista, kadib ayaad degi kartaa.');
       socket.emit('meldRejected', { hand: p.hand });
       return;
     }
@@ -3387,18 +3642,39 @@ io.on('connection', socket => {
       return;
     }
 
+    // Xeerka gaarka ah ee stock-ga:
+    // Ciyaaryahan aan weli furin oo haysta 15 kaar waa inuu dhisaa dhammaan
+    // set-yada ka samaysan 14 kaar. Kaar kasta oo ka mid ah 15-ka wuu ahaan
+    // karaa kaarka haraya; kaarka haray ayaa la tuurayaa.
+    const isStockOpening = !p.isOpened && !p.pickedFromDiscard && p.drewFromStock;
+    if (isStockOpening) {
+      const selectedOpeningIds = new Set(selectedIds);
+      const opensAllOriginalCards =
+        p.hand.length === 15 &&
+        selectedOpeningIds.size === 14 &&
+        [...selectedOpeningIds].every(id => handById.has(id));
+
+      if (!opensAllOriginalCards) {
+        socket.emit(
+          'notification',
+          '❌ Stock-ga markaad ka qaadato kaarka 15aad, dhis set-yada 14 kaar; kaarka gacanta ku haray ayaa la tuurayaa.'
+        );
+        socket.emit('meldRejected', { hand: p.hand });
+        return;
+      }
+    }
+
     recordHumanAction(p);
 
     const lagaMaMaarmaan = getOpeningMinimum(room);
     
-    // Hubi saxnaanta variable-ka kaarka tuurka (isticmaal midkaaga saxda ah ama labadaba)
-    const discardCardId = p.lastPickedDiscardId || p.lastPickedCardId;
+    const discardCardId = p.lastPickedCardId;
     const pickedDiscardMustBeUsed = p.pickedFromDiscard && discardCardId
       ? cardIsInGroups(authoritativeSets, discardCardId)
       : true;
       
     if (!pickedDiscardMustBeUsed) {
-      socket.emit('notification', '❌ Kaarka tuurka aad qaadatay waa inaad ku darto kooxaha aad dhigeyso.');
+      socket.emit('notification', '❌ Kaarka tuurista aad qaadatay waa inaad ku darto kooxaha aad dhigeyso.');
       socket.emit('meldRejected', { hand: p.hand });
       return;
     }
@@ -3416,13 +3692,12 @@ io.on('connection', socket => {
 
     const finalSets = [];
     authoritativeSets.forEach(set => {
-      let processedSet = set;
-      if (set.length === 6) { finalSets.push(set.slice(0, 3), set.slice(3, 6)); }
-      else if (set.length === 7) { finalSets.push(set.slice(0, 4), set.slice(4, 7)); }
-      else { finalSets.push(set); }
+      // Taxanaha oo dhan hal set ha ahaado marka uu ka bato 3 kaar;
+      // kala-jebintu waxay qarin jirtay xiriirka iyo meelaha lagu kordhin karo.
+      finalSets.push(sortMeldCards(set));
     });
 
-    // 🔴 HALKAAN WAA IN LA CALAAMADIYAA KAARKA TUURKA EE MIISKA AADAY
+    // 🔴 HALKAAN WAA IN LA CALAAMADIYAA KAARKA TUURISTAA EE MIISKA LA SOO SAARAY EE LAGU DEGAY
     if (p.pickedFromDiscard && discardCardId) {
       finalSets.forEach(set => {
         set.forEach(card => {
@@ -3434,14 +3709,27 @@ io.on('connection', socket => {
     }
 
     const ids = new Set(authoritativeSets.flat().map(c => c.id));
+    const stockOpeningDiscard = isStockOpening
+      ? p.hand.find(card => !ids.has(card.id))
+      : null;
+    if (isStockOpening && !stockOpeningDiscard) {
+      socket.emit('notification', '❌ Hal kaar waa inuu ka haro set-yada si loo tuuro.');
+      socket.emit('meldRejected', { hand: p.hand });
+      return;
+    }
     p.hand = p.hand.filter(c => !ids.has(c.id));
     const wasOpenedBefore = p.isOpened;
     if (!wasOpenedBefore && p.pickedFromDiscard) p.openProviderId = p.dabaaqProviderId || null;
     p.isOpened = true; p.openedSets.push(...finalSets);
+
+    if (isStockOpening) {
+      p.mustDiscardCardId = stockOpeningDiscard.id;
+      p.drewFromStock = false;
+      socket.emit('stockOpeningReadyToDiscard', { cardId: stockOpeningDiscard.id });
+    }
     
     if (p.pickedFromDiscard && cardIsInGroups(authoritativeSets, discardCardId)) {
       p.pickedFromDiscard = false;
-      p.lastPickedDiscardId = null;
       p.lastPickedCardId = null;
     }
     if (!room.openedPlayerIds) room.openedPlayerIds = new Set();
@@ -3472,7 +3760,7 @@ io.on('connection', socket => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
     const p = room.players.find(pl => pl.id === socket.id); if (!p || !p.isOpened) return;
     if (!p.turnDrewCard) {
-      socket.emit('notification', '❌ Marka hore kaar ka qaado xabadka ama tuurista, kadib ayaad miiska ku dari kartaa.');
+      socket.emit('notification', '❌ Marka hore kaar ka qaado qaadashada ama tuurista, kadib ayaad miiska ku dari kartaa.');
       socket.emit('meldRejected', { hand: p.hand });
       return;
     }
@@ -3480,26 +3768,74 @@ io.on('connection', socket => {
     const requestedCards = Array.isArray(data?.cards) ? data.cards : [];
     if (p.pickedFromDiscard && p.lastPickedCardId &&
         !requestedCards.some(card => card?.id === p.lastPickedCardId)) {
-      socket.emit('notification', '❌ Kaarka tuurka aad qaadatay waa inaad ku darto koox miiska saaran.');
+      socket.emit('notification', '❌ Kaarka tuurista ee aad qaadatay waa inaad ku darto koox miiska saaran.');
       return;
     }
 
     const cardsById = new Map(p.hand.map(card => [card.id, card]));
     const cardsToAdd = requestedCards.map(card => cardsById.get(card?.id)).filter(Boolean);
-    if (cardsToAdd.length !== requestedCards.length ||
-        cardsToAdd.some(card => !cardFitsAnyOpenedSet(room, card))) {
+    const requestedIds = requestedCards.map(card => card?.id);
+    if (
+      !cardsToAdd.length ||
+      cardsToAdd.length !== requestedCards.length ||
+      new Set(requestedIds).size !== requestedIds.length
+    ) {
       socket.emit('notification', '❌ Kaar ka mid ah kuwa aad dooratay kuma dari karo koox miiska saaran.');
       return;
     }
 
+    const targetPlayerId = String(data?.targetPlayerId || '');
+    const targetSetIndex = Number.isInteger(data?.targetSetIndex)
+      ? data.targetSetIndex
+      : null;
+    const hasExplicitTarget = Boolean(targetPlayerId) || targetSetIndex !== null;
+    const explicitTargetPlayer = targetPlayerId
+      ? room.players.find(player => player.id === targetPlayerId)
+      : null;
+    const explicitTargetSet =
+      explicitTargetPlayer && targetSetIndex !== null
+        ? explicitTargetPlayer.openedSets?.[targetSetIndex]
+        : null;
+
+    if (hasExplicitTarget && !explicitTargetSet) {
+      socket.emit('notification', '❌ Set-kii aad dooratay hadda lama heli karo; mar kale isku day.');
+      return;
+    }
+
+    /*
+     * Kaarka meel-galaha ah hal set oo keliya ayuu gelayaa. Haddii
+     * isticmaaluhu set gaar ah ku jiido, set-kaas ayaa la beegsanayaa;
+     * haddii kale server-ku wuxuu dooranayaa set-ka ugu horreeya ee saxda ah.
+     * Qorshaha ku-meelgaarka ahi wuxuu kaloo taageeraa laba kaar oo isku
+     * mar la dhigo, midka labaadna ku habboonaado marka kan koowaad galo.
+     */
+    const candidateSets = hasExplicitTarget
+      ? [explicitTargetSet]
+      : room.players.flatMap(player => player.openedSets || []);
+    const plannedSets = new Map();
+
+    for (const card of cardsToAdd) {
+      const destination = candidateSets.find(set => {
+        const stagedSet = plannedSets.get(set) || [...set];
+        return (
+          !stagedSet.some(existing => existing?.id === card.id) &&
+          isCardMeelGale(card, [stagedSet])
+        );
+      });
+
+      if (!destination) {
+        socket.emit('notification', '❌ Kaarka la doortay kuma habboona set-ka la beegsaday.');
+        return;
+      }
+
+      const stagedSet = [...(plannedSets.get(destination) || destination), card];
+      plannedSets.set(destination, sortMeldCards(stagedSet));
+    }
+
     recordHumanAction(p);
 
-    cardsToAdd.forEach(card => {
-      room.players.forEach(player => {
-        (player.openedSets || []).forEach(set => {
-          if (isCardMeelGale(card, [set]) && !set.some(c => c.id === card.id)) set.push(card);
-        });
-      });
+    plannedSets.forEach((orderedSet, set) => {
+      set.splice(0, set.length, ...orderedSet);
     });
     const ids = new Set(cardsToAdd.map(c => c.id));
     p.hand = p.hand.filter(c => !ids.has(c.id));

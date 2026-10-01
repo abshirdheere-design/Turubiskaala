@@ -26,6 +26,8 @@ let waitingAutoTimer = null;
 let waitingCountdown = 10;
 let inGame = false;
 let lastPickedDiscardId = null;
+let lastDrawnCardId = null;
+let mustDiscardCardId = null;
 let currentRoomNumber = null;
 let onlineUsers = [];
 let publicClientIpPromise = null;
@@ -700,6 +702,26 @@ function getCardValue(card) {
   return map[v] || parseInt(v);
 }
 
+function sortMeldCards(set) {
+  if (!Array.isArray(set)) return [];
+  const cards = [...set];
+  if (cards.length < 2) return cards;
+
+  if (cards.every(card => card && card.suit === cards[0].suit)) {
+    // Taxanaha miiska ku yaal mar walba u muuji A ilaa 6.
+    return cards.sort((a, b) => getCardValue(b) - getCardValue(a));
+  }
+
+  if (cards.every(card => card && card.value === cards[0].value)) {
+    const suitOrder = { '♠': 0, '♥': 1, '♦': 2, '♣': 3 };
+    return cards.sort(
+      (a, b) => (suitOrder[a.suit] ?? 99) - (suitOrder[b.suit] ?? 99)
+    );
+  }
+
+  return cards;
+}
+
 function cardPoints(card) {
   return POINT_VALUES[String(card.value)] || 0;
 }
@@ -918,7 +940,7 @@ function applyFooroLogic(winnerId, providerId, allPlayers) {
     }
   }
 
-  // 3. Haddii ay dhacdo in dadka oo dhan furan yihiin ama ay siman yihiin, qaado kan dhibcaha ugu badan haysta
+  // 3. Haddii ay dhacdo in  ay dageen dhamaan ama ama ay isle'egyihiin, foorada haku dhacdo kan dhibcaha ugu badan haysta
   const winnerIdxForTie = allPlayers.findIndex(p => p.id === winnerId);
   const others = allPlayers.filter(p => p.id !== winnerId);
 
@@ -1111,7 +1133,7 @@ function makeDraggableSet(set, setIdx, targetPlayerId) {
   const setDiv = document.createElement('div');
   setDiv.className = 'opened-set';
   if (set && Array.isArray(set)) {
-    set.forEach((card, ci) => {
+    sortMeldCards(set).forEach((card, ci) => {
       if (card) setDiv.appendChild(makeCard(card, 'sm', { overlap: ci > 0 }));
     });
   }
@@ -1179,7 +1201,7 @@ function renderMyTableSets() {
         player.openedSets.forEach(set => {
           const setDiv = document.createElement('div');
           setDiv.className = 'opened-set';
-          set.forEach(card => {
+          sortMeldCards(set).forEach(card => {
             const el = makeCard(card, 'sm');
             el.classList.add('card-pickup-anim');
             setDiv.appendChild(el);
@@ -1397,28 +1419,37 @@ function handleDhigo() {
     else { processedGroups.push(group); }
   });
 
+  const isStockOpening =
+    !isOpened &&
+    hasDrawn &&
+    !pickedFromDiscard &&
+    myHand.length === 15 &&
+    !!lastDrawnCardId;
+
+  if (isStockOpening && selected.length !== myHand.length - 1) {
+    showNotification('❌ Stock-ga markaad ka qaadato kaarka 15aad, dhis set-yada 14 kaar; kaarka gacanta ku haray ayaa la tuurayaa.');
+    return;
+  }
+
   const moveScore = selected.reduce((s, c) => s + cardPoints(c), 0);
 
   if (!isOpened) {
     const currentTotal = temporaryScore + moveScore;
     const allSetsSoFar = [...myOpenedSets, ...processedGroups];
-    const hasFourPlus = allSetsSoFar.some(g => g.length >= 4);
+    // Server-ku wuxuu 6/7-card group u kala jaraa marka uu kaydinayo,
+    // laakiin shuruudda furitaanka waa in group-kii la doortay laftiisu
+    // ahaa 4+; ha ku diidin split-kaas muuqaalka client-ka.
+    const hasFourPlus =
+      validGroups.some(group => group.length >= 4) ||
+      myOpenedSets.some(group => group.length >= 4);
     const effectiveMin = currentMinToOpen;
 
-    // Hubi haddii uu ciyaaryahanku gacanta ka saarayo dhammaan kaararkiisa hal mar (Finishing Move)
-    const isFinishingMove = selected.length === myHand.length;
-
-    // Haddii uu yahay Finishing Move, XAKUNKA DHIBCAHA LA CQSAYO WAA LA DHAARIYAA (Skipped)
-    if (isFinishingMove) {
-      isOpened = true; iHaveOpened = true;
-      myOpenedSets = allSetsSoFar;
-      myHand = [];
-      if (socket) {
-        socket.emit('meldSets', { sets: allSetsSoFar, totalScore: currentTotal, isAdditional: false });
-        // Halkan waxaa la waci karaa ama la diri karaa dhacdada xiritaanka ciyaarta (endGame)
-      }
-      showNotification(`🎉 Hambalyo! Waxaad si guul leh ku wada xirtay gacantaada!`);
-      renderAll();
+    if (isStockOpening && (!hasFourPlus || currentTotal < effectiveMin)) {
+      showNotification(
+        !hasFourPlus
+          ? '❌ Stock-ga markaad ka qaadato, 14-kaarka aad dhigeyso waa inay yeeshaan ugu yaraan hal set oo 4+ ah.'
+          : `❌ 14-kaarka aad dhigeyso waa inay gaaraan ugu yaraan ${effectiveMin} dhibco.`
+      );
       return;
     }
 
@@ -1480,41 +1511,11 @@ function handleTuur() {
     return; 
   }
 
-  // Xalka cusub: Hubinta iyo iskudayga in kaarka si toos ah loo galiyo miiska haddii uu suurtagal yahay
   if (pickedFromDiscard) {
-    if (isOpened && lastPickedDiscardId) {
-      const pickedCard = myHand.find(c => c.id === lastPickedDiscardId);
-      if (pickedCard) {
-        // Halkan geli baaritaankaaga meel-gelinta (tusaale: canMeelGali ama logic-gaaga miiska)
-        const isMeelGale = typeof checkCardCanBeMeld === 'function' ? checkCardCanBeMeld(pickedCard) : true; // Beddel magaca halkaan haddii uu ka duwan yahay
-
-        if (isMeelGale) {
-          // Si toos ah ugu dar miiska
-          if (socket) {
-            socket.emit('addToExistingSets', { cards: [pickedCard] });
-          }
-          
-          // Ka saar gacanta kaarkii la isticmaalay
-          const pIdx = myHand.findIndex(c => c.id === lastPickedDiscardId);
-          if (pIdx !== -1) myHand.splice(pIdx, 1);
-
-          pickedFromDiscard = false;
-          lastPickedDiscardId = null;
-          // Halkaan ayay si toos ah uga gudubtaa (fall through) oo ay ugu dhaqaaqaysaa tuurista caadiga ah
-        } else {
-          showNotification('Tuurista ayaad qaadatay — fadlan marka hore "Dhigo" riix oo ku dar kaarka!');
-          return;
-        }
-      } else {
-        pickedFromDiscard = false;
-        lastPickedDiscardId = null;
-      }
-    } else {
-      showNotification(isOpened
-        ? 'Tuurista ayaad qaadatay — marka hore ku dar kaarka miiska saaran!'
-        : "Tuurista ayaad qaadatay — marka hore 'Dhigo' riix oo ku dar kaarka!");
-      return;
-    }
+    showNotification(isOpened
+      ? 'Tuurista ayaad qaadatay — marka hore ku dar kaarka miiska saaran!'
+      : "Tuurista ayaad qaadatay — marka hore 'Dhigo' riix oo ku dar kaarka!");
+    return;
   }
 
   const selIdx = myHand.findIndex(c => c.selected);
@@ -1524,6 +1525,11 @@ function handleTuur() {
   }
 
   const cardToPlay = myHand[selIdx];
+
+  if (mustDiscardCardId && cardToPlay.id !== mustDiscardCardId) {
+    showNotification('❌ Furitaanka stock-ga kadib waa inaad tuurtaa kaarka 15aad ee gacanta ku haray.');
+    return;
+  }
 
   if (cardToPlay.fromDiscard) {
     showNotification('Ma tuuri kartid kaarka aad tuurista ka qaadatay ilaa aad miiska ku darto!');
@@ -1545,6 +1551,8 @@ function handleTuur() {
   hasDrawn = false; 
   pickedFromDiscard = false; 
   lastPickedDiscardId = null;
+  lastDrawnCardId = null;
+  mustDiscardCardId = null;
   
   clearInterval(turnTimerInterval);
   myHand.forEach(c => { c.selected = false; c.fromDiscard = false; });
@@ -2008,6 +2016,8 @@ function startNextGame() {
   hasDrawn = false;
   pickedFromDiscard = false;
   lastPickedDiscardId = null;
+  lastDrawnCardId = null;
+  mustDiscardCardId = null;
   if (turnTimerInterval) clearInterval(turnTimerInterval);
 
   emitForceResetWhenReady();
@@ -2062,13 +2072,288 @@ function somaliGameText(isMe) {
   };
 }
 
-function buildFinishText(t, isMeWinner, winnerName, providerPlayer) {
+function buildFinishText(
+  t,
+  isMeWinner,
+  winnerName,
+  providerPlayer,
+  fooroTarget,
+  fooroProviderNames
+) {
+  const escapedProviderNames = Array.isArray(fooroProviderNames)
+    ? fooroProviderNames.filter(Boolean)
+    : [];
+  if (fooroTarget && escapedProviderNames.length) {
+    return isMeWinner
+      ? `Waxaad ciyaarta ku xirtay ${fooroTarget.name}.`
+      : `${winnerName} baa ciyaarta ku xiray ${fooroTarget.name}.`;
+  }
   if (!providerPlayer) {
     return isMeWinner ? t.closeFromStock : `${winnerName} baa kor ka xiray ciyaarta.`;
   }
   return isMeWinner
     ? `${t.closeFromHand} ${providerPlayer.name}.`
     : `${winnerName} baa ka xiray gacanta ${providerPlayer.name}.`;
+}
+
+function buildGameOverStory({
+  isMeWinner,
+  winnerName,
+  providerPlayer,
+  fooroTarget,
+  fooroWasTransferred,
+  fooroOwnerName,
+  fooroReturnedToOwnerName,
+  fooroTargetBefore,
+  fooroTargetAfter,
+  fooroProviderNames,
+  hoosgaleName,
+}) {
+  const winnerLabel = isMeWinner ? `Adiga (${winnerName})` : winnerName;
+  const parts = [];
+  const escapedProviders = Array.isArray(fooroProviderNames)
+    ? fooroProviderNames.filter(Boolean)
+    : [];
+  const providerLabel = escapedProviders.length === 2
+    ? `${escapedProviders[0]} iyo ${escapedProviders[1]}`
+    : escapedProviders.length > 2
+      ? `${escapedProviders.slice(0, -1).join(', ')} iyo ${escapedProviders.at(-1)}`
+      : escapedProviders[0] || null;
+
+  if (fooroTarget && providerLabel) {
+    parts.push(
+      `${winnerLabel} ayaa ciyaarta ku xiray ${fooroTarget.name}.`
+    );
+    parts.push(
+      `${providerLabel} way dageen, Fooradana way ka gambadeen; ` +
+      `sidaas darteed Fooradu waxay ku dhacday ${fooroTarget.name}.`
+    );
+  } else if (providerPlayer && !isMeWinner) {
+    parts.push(`${winnerLabel} ayaa ciyaarta ku xiray ${providerPlayer.name}.`);
+    if (providerPlayer.isOpened) {
+      parts.push(
+        `${providerPlayer.name} oo kaarka soo tuuray ayaa degay; ` +
+        `sidaas darteed ${fooroTarget?.name || 'ciyaaryahanka xiga'} ayaa lagu xiray.`
+      );
+    } else if (fooroTarget) {
+      parts.push(`${fooroTarget.name} ayaa lagu xiray.`);
+    }
+  } else if (providerPlayer) {
+    parts.push(`Waxaad ciyaarta ku xirtay ${providerPlayer.name}.`);
+    if (providerPlayer.isOpened) {
+      parts.push(
+        `${providerPlayer.name} oo kaarka soo tuuray ayaa degay; ` +
+        `sidaas darteed ${fooroTarget?.name || 'ciyaaryahanka xiga'} ayaa lagu xiray.`
+      );
+    } else if (fooroTarget) {
+      parts.push(`${fooroTarget.name} ayaa lagu xiray.`);
+    }
+  } else {
+    parts.push(isMeWinner ? 'Waxaad ciyaarta ku xiray kaarkaagii ugu dambeeyay.' : `${winnerName} ayaa ciyaarta xiray.`);
+  }
+
+  const targetBeforeNet =
+    Number(fooroTargetBefore?.wins || 0) - Number(fooroTargetBefore?.fooros || 0);
+  const targetAfterNet =
+    Number(fooroTargetAfter?.wins || 0) - Number(fooroTargetAfter?.fooros || 0);
+  const fooroReducedPoints =
+    targetBeforeNet - targetAfterNet;
+  const formatSignedScore = score =>
+    score > 0 ? `+${score}` : `${score}`;
+  const targetEnteredBatuuto =
+    fooroTarget &&
+    hoosgaleName &&
+    normalizeName(fooroTarget.name) === normalizeName(hoosgaleName);
+  const fooroConsumedPositiveScore =
+    fooroTargetBefore &&
+    fooroTargetAfter &&
+    targetBeforeNet > 0 &&
+    fooroReducedPoints > 0 &&
+    Number(fooroTargetAfter.fooros || 0) > Number(fooroTargetBefore.fooros || 0);
+
+  if (fooroConsumedPositiveScore) {
+    parts.push(
+      `${fooroTarget?.name || 'Ciyaaryahanka'} wuxuu hore u lahaa ${formatSignedScore(targetBeforeNet)}. ` +
+      `Waxaa laga qaatay ${formatSignedScore(fooroReducedPoints)}, sidaasna wuxuu ku noqday ` +
+      `${formatSignedScore(targetAfterNet)}.` +
+      `${targetEnteredBatuuto ? ` ${fooroTarget.name} wuxuu galay BATUUTO.` : ''}`
+    );
+  } else if (fooroReturnedToOwnerName) {
+    parts.push(`Fooradii waxay ugu noqotay ${fooroReturnedToOwnerName}; qof kale looma wareejin.`);
+  } else if (fooroWasTransferred) {
+    parts.push(
+      `Fooradii uu lahaa ${fooroOwnerName || 'milkiilihii hore'} ` +
+      `ayaa ${fooroTarget?.name || 'ciyaaryahanka'} la wareegay.`
+    );
+  } else if (fooroTarget) {
+    parts.push(
+      `Fooro cusub ayaa ku dhacday ${fooroTarget.name}; ` +
+      `${isMeWinner ? 'Waxaad yeelatay Fooradaas' : `${winnerName} ayaa yeeshay Fooradaas`}.`
+    );
+  }
+  if (targetEnteredBatuuto && !fooroConsumedPositiveScore) {
+    parts.push(`${fooroTarget.name} wuxuu galay BATUUTO.`);
+  }
+
+  return parts.join(' ');
+}
+
+function getGameOverPlayerSets(player) {
+  if (!player || typeof player !== 'object') return [];
+  const candidates = [player.openedSets, player.sets, player.melds, player.groups];
+  return candidates.find(Array.isArray) || [];
+}
+
+function gameOverCardHtml(card) {
+  if (!card || typeof card !== 'object') return '';
+  const value = card.value ?? card.rank ?? '?';
+  const suit = card.suit ?? '';
+  const suitText = String(suit);
+  const isRed = ['♥', '♦', 'hearts', 'diamonds', 'H', 'D'].includes(suitText);
+  // Kaararka madow ha la mid noqon background-ka cad; haddii loo isticmaalo
+  // #dfe6e9 waxay u muuqdaan kuwo aan la rogin, gaar ahaan ♠ iyo ♣.
+  const color = isRed ? '#e74c3c' : '#20252b';
+
+  return `
+    <span style="
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:2px;
+      min-width:30px;
+      height:36px;
+      padding:2px 5px;
+      margin:2px;
+      border-radius:5px;
+      background:#f7f7f7;
+      color:${color};
+      border:1px solid rgba(0,0,0,0.22);
+      box-shadow:0 1px 2px rgba(0,0,0,0.35);
+      font-weight:800;
+      font-size:0.82em;
+      line-height:1;
+      vertical-align:middle;
+    ">
+      <span>${escapeHistoryHtml(value)}</span><span>${escapeHistoryHtml(suit)}</span>
+    </span>
+  `;
+}
+
+function gameOverCardListHtml(cards, emptyText = 'Ma jiro') {
+  if (!Array.isArray(cards) || cards.length === 0) {
+    return `<span style="color:#777;font-size:0.85em">${escapeHistoryHtml(emptyText)}</span>`;
+  }
+  return cards.filter(Boolean).map(gameOverCardHtml).join('');
+}
+
+function gameOverSetType(set) {
+  if (!Array.isArray(set) || set.length === 0) return 'Set';
+  const sameSuit = set.every(card => card && card.suit === set[0].suit);
+  const sameValue = set.every(card => card && card.value === set[0].value);
+  if (sameSuit) return 'Taxane';
+  if (sameValue) return 'Koox';
+  return 'Set';
+}
+
+function gameOverSetsHtml(player) {
+  const sets = getGameOverPlayerSets(player);
+  if (!sets.length) {
+    return `<span style="color:#777;font-size:0.85em">Ma uusan dhisin set</span>`;
+  }
+
+  return sets.map((set, index) => {
+    const cards = Array.isArray(set) ? sortMeldCards(set) : [];
+    const points = cards.reduce((sum, card) => sum + (card ? cardPoints(card) : 0), 0);
+    return `
+      <div style="
+        display:flex;
+        align-items:center;
+        flex-wrap:wrap;
+        gap:2px;
+        margin:3px 0;
+        padding:3px 5px;
+        border-left:2px solid #f1c40f;
+        background:rgba(241,196,15,0.06);
+        border-radius:3px;
+      ">
+        <span style="min-width:56px;color:#f1c40f;font-size:0.78em;font-weight:700">
+          ${gameOverSetType(set)} ${index + 1}
+        </span>
+        ${gameOverCardListHtml(cards, 'Set madhan')}
+        <span style="color:#888;font-size:0.72em;margin-left:3px">(${points} dh)</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function gameOverPlayerCardsHtml(player) {
+  const hand = Array.isArray(player?.hand) ? player.hand : [];
+  const sets = getGameOverPlayerSets(player);
+  const hasCardData = Array.isArray(player?.hand) || sets.length > 0;
+
+  if (!hasCardData) {
+    return `
+      <div style="margin-top:4px;color:#777;font-size:0.8em">
+        Faahfaahinta kaararka server-ku ma soo dirin.
+      </div>
+    `;
+  }
+
+  return `
+    <details style="
+      margin:4px 0 7px 0;
+      padding:0 8px;
+      background:rgba(0,0,0,0.14);
+      border-radius:5px;
+      line-height:1.35;
+    ">
+      <summary style="
+        cursor:pointer;
+        padding:6px 0;
+        color:#f1c40f;
+        font-size:0.8em;
+        font-weight:700;
+        user-select:none;
+      ">
+        ▶ Muuji set-yada iyo kaararka
+        <span style="color:#888;font-size:0.9em;font-weight:400">
+          (${sets.length} set · ${hand.length} kaar)
+        </span>
+      </summary>
+      <div style="padding:0 0 6px 0">
+        <div style="color:#f1c40f;font-size:0.8em;font-weight:700;margin-bottom:2px">
+          🧩 Set-yada uu dhisay
+        </div>
+        ${gameOverSetsHtml(player)}
+        <div style="
+          color:#f1c40f;
+          font-size:0.8em;
+          font-weight:700;
+          margin-top:6px;
+          padding-top:5px;
+          border-top:1px dashed rgba(255,255,255,0.12);
+        ">
+          🃏 Kaararka gacanta ugu haray
+        </div>
+        <div style="display:flex;align-items:center;flex-wrap:wrap;margin-top:1px">
+          ${gameOverCardListHtml(hand)}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function buildExplanationStory(explanation) {
+  if (!explanation || typeof explanation !== 'object') return null;
+
+  const lines = [
+    explanation.summary,
+    ...(Array.isArray(explanation.facts) ? explanation.facts : []),
+  ]
+    .map(line => String(line || '').trim())
+    .filter(Boolean);
+
+  return lines.length ? lines.join(' ') : null;
 }
 
 let serverOfflineTimer = null;
@@ -2188,6 +2473,8 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     currentTurnId = null;
     myHand = hand.map(c => ({ ...c, selected: false, fromDiscard: false }));
     lastPickedDiscardId = null;
+    lastDrawnCardId = null;
+    mustDiscardCardId = null;
     hasDrawn = false; pickedFromDiscard = false;
     isOpened = false; iHaveOpened = false; myOpenedSets = [];
     const gameOverModal = $('gameover-modal');
@@ -2244,6 +2531,11 @@ function handleGameOverData(resultsFromBackendOrLogic) {
             fromDiscard: baddaCardIds.has(c.id) || c.id === lastPickedDiscardId
           }));
         }
+        hasDrawn = !!me.turnDrewCard;
+        pickedFromDiscard = !!me.pickedFromDiscard;
+        lastPickedDiscardId = me.lastPickedCardId || null;
+        lastDrawnCardId = me.lastDrawnCardId || null;
+        mustDiscardCardId = me.mustDiscardCardId || null;
       }
     }
     updateFooroPanel();
@@ -2263,13 +2555,25 @@ function handleGameOverData(resultsFromBackendOrLogic) {
   socket.on('receiveCard', card => {
     myHand.push({ ...card, selected: false, fromDiscard: false });
     hasDrawn = true;
+    pickedFromDiscard = false;
+    lastPickedDiscardId = null;
+    lastDrawnCardId = card.id;
+    mustDiscardCardId = null;
     renderHand();
   });
 
   socket.on('discardPickedSuccess', (data) => {
     hasDrawn = true; pickedFromDiscard = true; lastPickedDiscardId = data.card.id;
+    lastDrawnCardId = null;
+    mustDiscardCardId = null;
     showNotification('Kaarka tuurista ayaad qaadatay — Hadda waa inaad degtaa ama soo celisaa!', 3000);
     renderHeader();
+  });
+
+  socket.on('stockOpeningReadyToDiscard', data => {
+    mustDiscardCardId = data?.cardId || null;
+    showNotification('14-kii kaar waa la dhigay. Hadda waa inaad tuurtaa kaarka 15aad ee gacanta ku haray.', 3000);
+    renderAll();
   });
 
   socket.on('updateHand', data => {
@@ -2301,6 +2605,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
   socket.on('discardReturnedSuccess', () => {
     myHand.forEach(c => { c.fromDiscard = false; });
     pickedFromDiscard = false; hasDrawn = false; lastPickedDiscardId = null;
+    lastDrawnCardId = null; mustDiscardCardId = null;
     showNotification('Kaarkii tuurista ayaad ku soo celisay. Hadda kaar qaado ama tuurista ka qaado.', 3000);
     renderAll();
   });
@@ -2309,6 +2614,8 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     myHand.forEach(c => { c.fromDiscard = false; });
     pickedFromDiscard = false;
     lastPickedDiscardId = null;
+    lastDrawnCardId = null;
+    mustDiscardCardId = null;
     renderHeader();
     renderHand();
   });
@@ -2320,6 +2627,8 @@ function handleGameOverData(resultsFromBackendOrLogic) {
       pickedFromDiscard = false;
       hasDrawn = false;
       lastPickedDiscardId = null;
+      lastDrawnCardId = null;
+      mustDiscardCardId = null;
       renderAll();
     }
   });
@@ -2328,6 +2637,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     const isMe = socket && data.playerId === socket.id;
     if (isMe) {
       isMyTurn = false; hasDrawn = false; pickedFromDiscard = false; lastPickedDiscardId = null;
+      lastDrawnCardId = null; mustDiscardCardId = null;
       if (turnTimerInterval) clearInterval(turnTimerInterval);
       if (data.drawnCard && !myHand.some(c => c.id === data.drawnCard.id)) myHand.push({ ...data.drawnCard, selected: false, fromDiscard: false });
       const discardedCard = data.card;
@@ -2609,9 +2919,33 @@ socket.on('gameOver', data => {
     const body = $('modal-body');
     const t = somaliGameText(isMeWinner);
 
+    const explanationStory = buildExplanationStory(data.gameOverExplanation);
+    // Cinwaanka sare: qoraalka gaaban ee somaliGameText (ma ku celiyo sharaxaadda sanduuqa hoose)
     const finishText = data.allBatuuto
       ? `Saddex ciyaaryahan ayaa galay BATUUTO; ${data.winnerName} ayaa si toos ah u guuleystay.`
-      : buildFinishText(t, isMeWinner, data.winnerName, xiradTurub ? providerPlayer : null);
+      : buildFinishText(
+          t,
+          isMeWinner,
+          data.winnerName,
+          providerPlayer,
+          fooroTarget,
+          data.fooroProviderNames || data.gameOverExplanation?.fooroProviderNames || []
+        );
+    const _unusedOldFinish = (data.allBatuuto
+      ? `Saddex ciyaaryahan ayaa galay BATUUTO; ${data.winnerName} ayaa si toos ah u guuleystay.`
+      : buildGameOverStory({
+          isMeWinner,
+          winnerName: data.winnerName,
+          providerPlayer,
+          fooroTarget,
+          fooroWasTransferred: data.fooroWasTransferred === true,
+          fooroOwnerName: data.fooroOwnerName || null,
+          fooroReturnedToOwnerName: data.fooroReturnedToOwnerName || null,
+           fooroTargetBefore: data.fooroTargetBefore || null,
+           fooroTargetAfter: data.fooroTargetAfter || null,
+           fooroProviderNames: data.fooroProviderNames || data.gameOverExplanation?.fooroProviderNames || [],
+           hoosgaleName: data.hoosgaleName || null,
+        }));
 
     if (isMeWinner) {
       if (icon) icon.textContent = "🏆";
@@ -2625,7 +2959,15 @@ socket.on('gameOver', data => {
     }
 
     const openInfo = $('modal-open-info');
-     const isDabaaq = data.dabaaqType === 'negative' || data.dabaaqType === 'positive';
+    const hasRoutedDabaaq =
+      Array.isArray(data.gameOverExplanation?.topDabaaqPairs) ||
+      Array.isArray(data.gameOverExplanation?.lowerDabaaqPairs);
+    const lowerDabaaqPairs = Array.isArray(data.gameOverExplanation?.lowerDabaaqPairs)
+      ? data.gameOverExplanation.lowerDabaaqPairs
+      : [];
+    const isDabaaq =
+      (data.dabaaqType === 'negative' || data.dabaaqType === 'positive') &&
+      (!hasRoutedDabaaq || lowerDabaaqPairs.length > 0);
     if (openInfo) {
       let xiradLine = '';
 
@@ -2636,9 +2978,29 @@ socket.on('gameOver', data => {
         * xirin sharaxaadda Dabaaqda xiradTurub oo keliya.
         */
        if (xiradTurub || isDabaaq || fooroTarget) {
-        const victim = fooroTarget ? fooroTarget.name : "Ciyaartoy kale";
         let mathExplanation = '';
-        if (isDabaaq) {
+         if (isDabaaq) {
+           const selectedPair = data.dabaaqPair;
+           const selectedPairIsLower = selectedPair && lowerDabaaqPairs.some(pair =>
+             [pair?.player1, pair?.player2].map(normalizeName).sort().join('::') ===
+             [selectedPair?.player1, selectedPair?.player2].map(normalizeName).sort().join('::')
+           );
+           if (lowerDabaaqPairs.length && !selectedPairIsLower) {
+             mathExplanation = `
+               <div style="
+                 margin-top:6px;
+                 padding-top:6px;
+                 border-top:1px dashed rgba(241,196,15,0.4);
+                 font-size:0.9em;
+                 line-height:1.5;
+               ">
+                 ⚖️ <b>DABAAQ hoose:</b>
+                 ${lowerDabaaqPairs
+                   .map(pair => `${escapeHistoryHtml(pair.player1)} iyo ${escapeHistoryHtml(pair.player2)}`)
+                   .join('; ')}
+               </div>
+             `;
+           } else {
           let dabaaqLabel = '';
 
           const pair = data.dabaaqPair;
@@ -2710,12 +3072,47 @@ socket.on('gameOver', data => {
               font-size:0.9em;
               line-height:1.5;
             ">
-              ⚖️ <b>DABAAQ:</b> Xaalad isku mid ah ayaa dhacday:<br>
+              ⚖️ <b>DABAAQ:</b> ${data.dabaaqType === 'positive'
+                ? 'Waa dabaaq togan sidaan baana loo xisaabay dabaaqda.'
+                : 'Waa dabaaq taban sidaan baana loo xisaabay dabaaqda.'}<br>
               ${dabaaqLabel}
             </div>
           `;
+           }
         }
-        xiradLine = `<div style="margin-bottom:10px;padding:8px 10px;background:rgba(231,76,60,0.12);border-left:3px solid #e74c3c;border-radius:6px;font-size:0.85em;color:#e0e0e0;line-height:1.4;">♠️ <span style="color:#f1c40f;font-weight:700">${data.winnerName}</span> ayaa ku xiray <span style="color:#e74c3c;font-weight:700">${victim}</span>.${mathExplanation}</div>`;
+        const detailedFooroStory = buildGameOverStory({
+          isMeWinner,
+          winnerName: data.winnerName,
+          providerPlayer,
+          fooroTarget,
+          fooroWasTransferred: data.fooroWasTransferred === true,
+          fooroOwnerName: data.fooroOwnerName || null,
+          fooroReturnedToOwnerName: data.fooroReturnedToOwnerName || null,
+           fooroTargetBefore: data.fooroTargetBefore || null,
+           fooroTargetAfter: data.fooroTargetAfter || null,
+           fooroProviderNames: data.fooroProviderNames || data.gameOverExplanation?.fooroProviderNames || [],
+           hoosgaleName: data.hoosgaleName || null,
+        });
+        const storyTargetBeforeNet =
+          Number(data.fooroTargetBefore?.wins || 0) -
+          Number(data.fooroTargetBefore?.fooros || 0);
+        const storyTargetAfterNet =
+          Number(data.fooroTargetAfter?.wins || 0) -
+          Number(data.fooroTargetAfter?.fooros || 0);
+        const storyHasPositiveFooroReduction =
+          data.fooroTargetBefore &&
+          data.fooroTargetAfter &&
+          storyTargetBeforeNet > 0 &&
+          storyTargetAfterNet < storyTargetBeforeNet &&
+          Number(data.fooroTargetAfter.fooros || 0) >
+            Number(data.fooroTargetBefore.fooros || 0);
+        const story =
+          storyHasPositiveFooroReduction ||
+          data.fooroWasTransferred === true ||
+          Boolean(data.fooroReturnedToOwnerName)
+            ? detailedFooroStory
+            : explanationStory || detailedFooroStory;
+        xiradLine = `<div style="margin-bottom:10px;padding:8px 10px;background:rgba(231,76,60,0.12);border-left:3px solid #e74c3c;border-radius:6px;font-size:0.85em;color:#e0e0e0;line-height:1.5;">♠️ ${escapeHistoryHtml(story)}${mathExplanation}</div>`;
       }
 
       const rows = allP.map(p => {
@@ -2744,41 +3141,18 @@ socket.on('gameOver', data => {
         else statusHtml = `<span style="color:#e74c3c">❌ ${pt.notOpened}</span> · <span style="color:#e74c3c;font-size:0.85em">${handCount} kaar (${handPts} dh)${isFooro ? ' · + Fooro!' : ''}</span>`;
         
         const rowBg = isFooro ? 'background:rgba(231,76,60,0.08);' : (isWinner ? 'background:rgba(46,204,113,0.06);' : '');
-        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 4px;border-bottom:1px solid rgba(255,255,255,0.07);${rowBg}"><span>${nameHtml}</span><span>${statusHtml}</span></div>`;
+        return `
+          <div style="border-bottom:1px solid rgba(255,255,255,0.07);${rowBg}">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 4px;">
+              <span>${nameHtml}</span>
+              <span>${statusHtml}</span>
+            </div>
+            <div style="padding:0 4px 2px 4px">
+              ${gameOverPlayerCardsHtml(p)}
+            </div>
+          </div>
+        `;
       }).join('');
-
-      let fooroLine = '';
-      if (fooroTarget) {
-        const fooroHandPts = (fooroTarget.hand || []).reduce((s, c) => s + (c.points || 0), 0);
-        const sababta = fooroTarget.hoosgale
-          ? `wuxuu galay <span style="color:#8e44ad;font-weight:700">BATUUTO (Hoosgale)</span> — dib ayaa loogu celiyay kaararkiisii turub qaadashada`
-          : `${fooroTarget.isOpened ? '' : 'ma uusan degin — '}wuxuu hayay <span style="color:#e74c3c;font-weight:700">${fooroHandPts} dhibcood</span>`;
-
-        const fooroOwnerName =
-          data.fooroOwnerName ||
-          (data.fooroOwnerId ? allP.find(p => p.id === data.fooroOwnerId)?.name : null);
-        const fooroWasTransferred = data.fooroWasTransferred === true;
-        const transferredByName = data.fooroTransferorName || data.winnerName;
-        
-        if (data.fooroReturnedToOwnerName) {
-          fooroLine = `<div style="margin-top:8px;padding:6px 10px;background:rgba(241,196,15,0.12);border-left:3px solid #f1c40f;border-radius:6px;font-size:0.82em;color:#e0e0e0;line-height:1.5;">
-            🟡 Fooradii waxay ku noqotay <span style="color:#f1c40f;font-weight:700">${data.fooroReturnedToOwnerName}</span> — halkaas ayay ku baaba'day; qof kale looma darin fooro.
-          </div>`;
-        } else {
-          let ownershipLine = '';
-          if (fooroWasTransferred) {
-            ownershipLine = `<span style="color:#f1c40f;font-weight:700">${transferredByName}</span> ayaa wareejiyay fooro uu lahaa <span style="color:#f1c40f;font-weight:700">${fooroOwnerName || 'milkiile aan la xaqiijin'}</span>.`;
-          } else if (fooroTarget.hoosgale) {
-            ownershipLine = `<span style="color:#f1c40f;font-weight:700">${fooroTarget.name}</span> hoosgale ayuu galay; fooro cusub ayaa isaga ku dhacday, mana aha fooro uu qof kale hore u watay.`;
-          } else {
-            ownershipLine = `<span style="color:#f1c40f;font-weight:700">${data.winnerName}</span> ayaa yeeshay fooro cusub.`;
-          }
-
-          fooroLine = `<div style="margin-top:8px;padding:6px 10px;background:rgba(231,76,60,0.12);border-left:3px solid #e74c3c;border-radius:6px;font-size:0.82em;color:#e0e0e0;line-height:1.5;">
-            🔴 Fooro ayaa ku dhacday <span style="color:#e74c3c;font-weight:700">${fooroTarget.name}</span> — ${ownershipLine}<br>${sababta}
-          </div>`;
-        }
-      }
 
       const hoosgaleLine = data.hoosgaleName
         ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(142,68,173,0.12);border-left:3px solid #8e44ad;border-radius:6px;font-size:0.82em;color:#e0e0e0;line-height:1.5;">
@@ -2786,7 +3160,7 @@ socket.on('gameOver', data => {
         </div>`
         : '';
       
-      openInfo.innerHTML = `${xiradLine}<div style="font-size:0.85em;width:100%">${rows}</div>${fooroLine}${hoosgaleLine}`;
+      openInfo.innerHTML = `${xiradLine}<div style="font-size:0.85em;width:100%">${rows}</div>${hoosgaleLine}`;
     }
 
     const lbWrap = $('modal-leaderboard-wrap');
@@ -2851,6 +3225,7 @@ socket.on('receiveChat', data => {
     showNotification('HOOSGALE! Kaarahaagii waa laga qaaday.', 5000);
     myHand = []; isOpened = false; iHaveOpened = false; myOpenedSets = [];
     hasDrawn = false; pickedFromDiscard = false; lastPickedDiscardId = null;
+    lastDrawnCardId = null; mustDiscardCardId = null;
     renderAll();
   });
 
@@ -3022,6 +3397,8 @@ document.addEventListener('DOMContentLoaded', () => {
       hasDrawn = false;
       pickedFromDiscard = false;
       lastPickedDiscardId = null;
+      lastDrawnCardId = null;
+      mustDiscardCardId = null;
       if (turnTimerInterval) clearInterval(turnTimerInterval);
       socket.emit('forceResetGame');
     });

@@ -26,7 +26,15 @@ export function explainGameOver(input = {}) {
   const targetName = cleanName(input.fooroTargetName);
   const ownerName = cleanName(input.fooroOwnerName);
   const transferorName = cleanName(input.fooroTransferorName) || winnerName;
+  const providerName = cleanName(input.providerName);
   const hoosgaleName = cleanName(input.hoosgaleName);
+  const targetBefore = input.fooroTargetBefore;
+  const targetAfter = input.fooroTargetAfter;
+  const dabaaqPairs = Array.isArray(input.dabaaqPairs)
+    ? input.dabaaqPairs
+      .filter(pair => pair && pair.player1 && pair.player2)
+      .map(pair => `${cleanName(pair.player1)} iyo ${cleanName(pair.player2)}`)
+    : [];
   const facts = [];
 
   let type = 'normal';
@@ -38,11 +46,34 @@ export function explainGameOver(input = {}) {
       `${winnerName} ayaa si automatic ah u guuleystay, sababtoo ah ` +
       'saddex ciyaaryahan ayaa BATUUTO noqday, isaga ayaana soo haray.';
   } else if (input.actionType === 'discard') {
-    summary = `${winnerName} ayaa ciyaarta xiray kaarkiisii ugu dambeeyay.`;
+    summary = providerName
+      ? `${winnerName} ayaa ciyaarta ka xiray gacanta ${providerName}.`
+      : `${winnerName} ayaa soo gabagabeeyay.`;
   }
 
   if (targetName) {
-    if (input.fooroReturnedToOwnerName) {
+    if (providerName && input.providerOpened) {
+      facts.push(
+        `${providerName} oo kaarka soo tuuray ayaa degay; ` +
+        `sidaas darteed ${targetName} ayaa lagu xiray.`
+      );
+    }
+
+    const targetBeforeNet = scoreNet(targetBefore);
+    const targetAfterNet = scoreNet(targetAfter);
+    const fooroConsumedPositiveScore =
+      targetBefore &&
+      targetAfter &&
+      targetBeforeNet > 0 &&
+      targetAfterNet === 0 &&
+      (Number(targetAfter.fooros) || 0) > (Number(targetBefore.fooros) || 0);
+
+    if (fooroConsumedPositiveScore) {
+      facts.push(
+        `${targetName} wuxuu hore u lahaa +${targetBeforeNet}; ` +
+        `Fooradii ayaa loo dhigay +${targetBeforeNet}, sidaasna wuxuu ku noqday +${targetAfterNet}.`
+      );
+    } else if (input.fooroReturnedToOwnerName) {
       const returnedTo = cleanName(input.fooroReturnedToOwnerName);
       facts.push(
         `Fooradii waxay ugu noqotay ${returnedTo || targetName}; qof kale looma wareejin.`
@@ -67,10 +98,16 @@ export function explainGameOver(input = {}) {
     );
   }
 
-  if (input.dabaaqType === 'positive' && input.dabaaqPair) {
+  if (dabaaqPairs.length) {
     facts.push(
-      `DABAAQ togan ayaa dhacay: ${input.dabaaqPair.player1} iyo ` +
-      `${input.dabaaqPair.player2} ayaa isku score noqday.`
+      `DABAAQ ayaa u taalay: ${dabaaqPairs.join('; ')}. ` +
+      'Haddii laba qof ama in kabadan ay u taalay dabaaq waxaa loo xisaabayaa kala horreynta.'
+    );
+  } else if (input.dabaaqType === 'positive' && input.dabaaqPair) {
+    facts.push(
+      `DABAAQ togan ayaa dhacday: ${input.dabaaqPair.player1} iyo ` +
+      `${input.dabaaqPair.player2} ayaa lammaane DABAAQ noqday; ` +
+      'guuleystaha wuxuu helay laba dhibcood, ciyaaryahanka kalena hal dhibic ayaa laga jaray.'
     );
   } else if (input.dabaaqType === 'negative' && input.dabaaqPair) {
     facts.push(
@@ -95,9 +132,12 @@ export function explainGameOver(input = {}) {
     facts,
     scoreChanges,
     winnerName,
+    providerName,
     fooroTargetName: targetName,
     fooroOwnerName: ownerName,
     fooroWasTransferred: input.fooroWasTransferred === true,
+    fooroTargetBefore: targetBefore || null,
+    fooroTargetAfter: targetAfter || null,
     players: Array.isArray(input.players)
       ? input.players.map(player => ({
           name: cleanName(player?.name),
