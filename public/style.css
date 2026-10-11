@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap');
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --gold: #f1c40f;
@@ -487,6 +488,28 @@ body {
 .card.sm .cv-bot { font-size: 10px; }
 .card.md .cv-bot { font-size: 12px; }
 .card.lg .cv-bot { font-size: 14px; }
+.card.rotated { width: 64px; height: 46px; margin: 9px 0; transform: rotate(90deg); }
+.card.rotated:hover { transform: rotate(90deg) translateY(-4px); }
+.card-rotate-button {
+  position: absolute;
+  z-index: 3;
+  top: -6px;
+  right: -6px;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid rgba(0,0,0,.35);
+  border-radius: 50%;
+  background: var(--gold);
+  color: #111;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 17px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,.35);
+}
+.card-rotate-button:hover { filter: brightness(1.08); }
+.card-rotate-button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .card.overlap { margin-left: -16px; }
 .card.overlap:first-child { margin-left: 0; }
 .card-back-sm { width: 46px; height: 64px; background: radial-gradient(circle,#243b55 0%,#141e30 100%) !important; border: 1.5px solid var(--gold) !important; border-radius: 6px; flex-shrink: 0; box-shadow: 1px 1px 4px rgba(0,0,0,.6); position: relative; display: block !important; }
@@ -497,7 +520,21 @@ body {
    ========================================================================== */
 
 #hand-area { flex-shrink: 0; background: rgba(0,0,0,.9); border-top: 2px solid rgba(241,196,15,.3); padding: 12px 12px 32px; }
-.hand-cards { display: flex; align-items: flex-end; justify-content: center; gap: 4px; min-height: 110px; flex-wrap: wrap; margin-bottom: 12px; }
+.hand-cards { display: flex; align-items: flex-end; justify-content: center; gap: 8px; min-height: 110px; flex-wrap: wrap; margin-bottom: 12px; }
+.hand-card-group {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 5px 6px 3px;
+  border: 1px solid rgba(241,196,15,.38);
+  border-radius: 10px;
+  background: rgba(241,196,15,.07);
+  box-shadow: inset 0 0 10px rgba(241,196,15,.04);
+}
+.hand-card-group .card { margin-left: 0; }
+.hand-card-group .card + .card { margin-left: -7px; }
 .controls-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-green { background: #1e8449; color: #fff; }
@@ -507,6 +544,7 @@ body {
 .btn-green, .btn-gray, .btn-blue, .btn-red { padding: 10px 14px; border: none; border-radius: 10px; font-weight: 700; font-size: .85rem; cursor: pointer; transition: filter .15s; }
 .btn-green:hover, .btn-gray:hover, .btn-blue:hover, .btn-red:hover { filter: brightness(1.3); }
 .btn-green:disabled, .btn-red:disabled { opacity: .4; cursor: not-allowed; }
+.btn-group:disabled, .btn-blue:disabled, .btn-gray:disabled { opacity: .45; cursor: not-allowed; }
 .score-info { text-align: right; font-size: .85rem; color: rgba(255,255,255,.6); }
 .score-info .gold { color: var(--gold); font-weight: 700; }
 .score-info .muted { color: rgba(255,255,255,.35); }
@@ -529,6 +567,31 @@ body {
   width: 90%;
   max-width: 400px;
   pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  #game-screen.active .hand-card-group {
+    gap: 0 !important;
+    padding: 2px 4px !important;
+    border-radius: 6px !important;
+  }
+  #game-screen.active .hand-card-group .card + .card { margin-left: -10px !important; }
+  #game-screen.active .my-table-sets .card.rotated {
+    width: 36px !important;
+    height: 25px !important;
+    min-width: 36px !important;
+    min-height: 25px !important;
+    margin: 5px -5px !important;
+    transform: rotate(90deg) scale(.72) !important;
+  }
+  #game-screen.active .my-table-sets .card-rotate-button {
+    width: 13px !important;
+    height: 13px !important;
+    top: -5px !important;
+    right: -5px !important;
+    font-size: 9px !important;
+    line-height: 11px !important;
+  }
 }
 .notif-card {
   background: #000;
@@ -696,6 +759,67 @@ body {
 .card-pickup-anim { animation: cardPickup 0.35s ease; }
 .card-throw-anim  { animation: cardThrow  0.35s ease; }
 .discard-bot-took { animation: botTook    0.8s  ease; }
+.card-arriving { opacity: 0 !important; }
+.card-flight {
+  position: fixed;
+  z-index: 100000;
+  pointer-events: none;
+  transform-origin: top left;
+  perspective: 900px;
+  will-change: transform;
+  filter: drop-shadow(0 7px 12px rgba(0, 0, 0, .5));
+}
+.card-flight-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+}
+.card-flight-back,
+.card-flight-face {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  box-sizing: border-box;
+  border-radius: 12px !important;
+  backface-visibility: hidden;
+}
+.card-flight-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid #ffd700;
+  background: linear-gradient(135deg, #1a237e 0%, #283593 50%, #1a237e 100%);
+  box-shadow: 2px 2px 8px rgba(0, 0, 0, .5);
+  transform: rotateY(180deg);
+}
+.card-flight-back::after {
+  content: '★';
+  color: rgba(255, 215, 0, .65);
+  font-size: 2rem;
+}
+.card-flight-face {
+  transform: rotateY(0deg);
+}
+.card-flight-hand {
+  position: absolute;
+  z-index: 2;
+  right: -13px;
+  bottom: -17px;
+  font-size: 23px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .65));
+  transform-origin: 70% 70%;
+  animation: cardFlightHandWave .42s ease-in-out infinite alternate;
+}
+@keyframes cardFlightHandWave {
+  from { transform: rotate(-16deg) translateY(1px); }
+  to { transform: rotate(16deg) translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-flight-hand { animation: none; }
+}
 
 /* ==========================================================================
    RESPONSIVE — MOBILE (max-width: 768px)
@@ -1066,5 +1190,856 @@ body {
 .fooro-reset-custom-btn:hover {
   background-color: #e74c3c; /* Marka la dul saaro mouse-ka wuxuu noqonayaa casaan digniin ah */
   border-color: #c0392b;
+}
+
+/* ======================================================================
+   TURUBKA ISKALA 101 — reference-matched lobby & profile entry
+   Deep petrol, card-table gold, and crisp compact typography.
+   ====================================================================== */
+:root {
+  --gold: #e5b91f;
+  --green: #319b61;
+  --dark: #0d1516;
+  --card-red: #d84c4c;
+  --surface: #111b1d;
+  --line: rgba(229,185,31,.68);
+  --soft: rgba(225,232,227,.54);
+}
+html { background: var(--dark); }
+body {
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--dark);
+  color: #e7e9e6;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  user-select: text;
+}
+button, input, select { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+:focus-visible {
+  outline: 2px solid #f0ce55 !important;
+  outline-offset: 3px;
+}
+.screen { width: 100%; min-height: 100dvh; }
+.screen.active { display: flex; }
+#setup-screen {
+  position: relative;
+  min-height: 100dvh;
+  justify-content: flex-start;
+  overflow: visible;
+  padding: 25px 20px 50px;
+  border-top: 1px solid rgba(229,185,31,.62);
+  background:
+    radial-gradient(ellipse at 50% 26%, rgba(32,56,52,.12), transparent 46%),
+    #0d1516;
+}
+#setup-screen .history-corner-control {
+  position: absolute;
+  inset: 12px 16px auto auto;
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+.btn-history-open {
+  padding: 7px 11px;
+  border-color: rgba(229,185,31,.34);
+  background: rgba(229,185,31,.06);
+  color: #bda447;
+  font-size: .72rem;
+  border-radius: 6px;
+}
+.setup-center {
+  width: min(100%, 600px);
+  max-width: 600px;
+  min-height: calc(100dvh - 75px);
+  flex: 1 0 auto;
+  justify-content: center;
+  padding: 26px 14px 38px;
+  gap: 0;
+}
+.logo-block { flex: 0 0 auto; text-align: center; }
+.logo-title {
+  color: #e7bd19;
+  font-size: clamp(2.8rem, 5.1vw, 3.55rem);
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: .16em;
+  text-indent: .16em;
+  text-shadow: 0 0 22px rgba(229,185,31,.19);
+}
+.logo-sub {
+  margin-top: 10px;
+  color: rgba(229,185,31,.62);
+  font-size: .82rem;
+  letter-spacing: .65em;
+  text-indent: .65em;
+}
+.logo-suits { gap: 13px; margin-top: 12px; font-size: 1.05rem; }
+.logo-suits span { line-height: 1; }
+.logo-suits .red { color: #d84c4c; }
+.setup-hint { color: #d3d7d4; font-size: .8rem; }
+.setup-input-group { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+#name-input, .auth-input {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid rgba(230,235,231,.17);
+  border-radius: 8px;
+  background: #e8edf5;
+  color: #182023;
+  font-size: .88rem;
+  box-shadow: none;
+}
+#name-input::placeholder, .auth-input::placeholder { color: #59636b; opacity: 1; }
+#name-input:focus, .auth-input:focus {
+  border-color: #e5b91f;
+  box-shadow: 0 0 0 3px rgba(229,185,31,.15);
+}
+#join-btn {
+  padding: 13px 18px;
+  border: 1px solid #a78716;
+  border-radius: 9px;
+  background: #242416;
+  color: #e9bd24;
+  font-size: .82rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  cursor: pointer;
+  transition: background .18s ease, transform .18s ease;
+}
+#join-btn:hover { background: #353018; transform: translateY(-1px); }
+.setup-footer-info {
+  margin-top: 76px;
+  color: rgba(205,211,208,.28);
+  font-size: .73rem;
+  letter-spacing: .01em;
+}
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  height: 22px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(229,185,31,.58);
+  background: rgba(0,0,0,.58);
+  color: rgba(205,211,208,.34);
+  font-size: .65rem;
+  line-height: 1.2;
+}
+.footer .gold { color: #c5a627; }
+
+/* Unauthenticated reference: keep the existing username + 4-digit PIN
+   contract, with the two fields presented side by side. */
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .logo-block { margin-bottom: 74px; }
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .lobby-grid,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .setup-hint,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .setup-input-group,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .xiili-row,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-divider,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-profile-note {
+  display: none !important;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-section {
+  width: min(100%, 356px);
+  margin: 0;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-status,
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-error { display: none; }
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-login-area { width: 100%; }
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-row {
+  justify-content: center;
+  gap: 9px;
+  margin-bottom: 7px;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-input {
+  flex: 1 1 0;
+  width: 0;
+  height: 34px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 9px;
+  font-size: .72rem;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-pin { flex-basis: 0; text-align: left; letter-spacing: normal; }
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-btn-row { margin: 0 0 7px; }
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .btn-auth {
+  padding: 7px 18px;
+  border-color: rgba(229,185,31,.42);
+  border-radius: 8px;
+  background: rgba(229,185,31,.09);
+  color: #e9bd24;
+  font-size: .74rem;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-meta {
+  margin: 0;
+  color: rgba(205,211,208,.38);
+  font-size: .67rem;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-toggle { color: #dfb922; }
+
+/* Signed-in state becomes a small, useful lobby; existing match controls
+   and the live online-user list retain their original listeners and IDs. */
+#setup-screen:has(.auth-status .auth-logged-in) { padding-top: 54px; }
+#setup-screen:has(.auth-status .auth-logged-in) .setup-center {
+  justify-content: flex-start;
+  padding-top: 30px;
+}
+#setup-screen:not(:has(.auth-status .auth-logged-in)) .profile-strip { display: none !important; }
+#setup-screen:has(.auth-status .auth-logged-in) .logo-block { margin-bottom: 36px; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-section { display: contents; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-status {
+  position: fixed;
+  top: 10px;
+  right: 14px;
+  left: auto;
+  z-index: 5;
+  min-height: 0;
+  margin: 0;
+  text-align: right;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in {
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: .72rem;
+  white-space: nowrap;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in::before {
+  content: 'Soo dhowow';
+  color: #e8e9e5;
+  font-weight: 700;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .auth-name { color: #3aa96c; font-size: .74rem; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-score,
+#setup-screen:has(.auth-status .auth-logged-in) .auth-stats { display: none; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in .btn-auth-logout {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  padding: 4px 8px;
+  border-color: rgba(231, 76, 60, .55);
+  background: rgba(231, 76, 60, .14);
+  color: #ffd5d1;
+  font-size: .68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in .btn-auth-logout:hover {
+  background: rgba(231, 76, 60, .28);
+  border-color: #e74c3c;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 22px;
+  width: min(100%, 372px);
+}
+.lobby-card {
+  min-width: 0;
+  min-height: 154px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 17px 14px;
+  border: 3px solid #e7e9e6;
+  border-radius: 27px;
+  background: rgba(10,18,19,.35);
+}
+.lobby-card-title {
+  color: #e7e9e6;
+  font-size: .72rem;
+  font-weight: 700;
+  text-align: center;
+}
+.lobby-play-card .setup-hint { font-size: .72rem; }
+.lobby-play-card .setup-input-group { gap: 8px; }
+#setup-screen:has(.auth-status .auth-logged-in) #name-input {
+  width: 100%;
+  padding: 7px 8px;
+  background: #e8edf5;
+  border: 0;
+  border-radius: 5px;
+  font-size: .7rem;
+}
+#setup-screen:has(.auth-status .auth-logged-in) #join-btn {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: .68rem;
+}
+.lobby-online-card { justify-content: flex-start; padding-top: 16px; }
+.lobby-online-card .hdr-online-users { position: relative; }
+.lobby-online-card .hdr-online-toggle {
+  padding: 5px 9px;
+  border-color: rgba(49,155,97,.45);
+  background: rgba(49,155,97,.1);
+  color: #61c989;
+  font-size: .7rem;
+}
+.lobby-online-card .hdr-online-popover {
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: #101b1c;
+}
+.lobby-online-preview {
+  width: 100%;
+  max-height: 54px;
+  overflow: hidden;
+  color: rgba(221,226,222,.42);
+  font-size: .65rem;
+  line-height: 1.45;
+  text-align: center;
+}
+.lobby-online-list {
+  width: min(100%, 180px);
+  max-height: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  overflow: auto;
+  padding: 7px 9px;
+  border: 1px solid rgba(231,233,230,.76);
+  background: rgba(0,0,0,.28);
+  text-align: left;
+  font-size: .67rem;
+}
+.lobby-online-player { color: #48a5e8; font-weight: 700; }
+.lobby-online-empty { color: rgba(221,226,222,.52); }
+#setup-screen:has(.auth-status .auth-logged-in) .xiili-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: #d5d9d5;
+  font-size: .76rem;
+}
+.xiili-select {
+  padding: 3px 8px;
+  border: 1px solid rgba(224,229,225,.25);
+  border-radius: 4px;
+  background: #e7ebef;
+  color: #172022;
+  font-size: .72rem;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .setup-footer-info { margin-top: 34px; }
+
+/* Keep the online roster useful while playing, after relocating its original
+   markup to the lobby: pin its toggle into the top-right game header area. */
+body > #hdr-online-users { display: none; }
+body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users,
+body:has(#game-screen.active) > #hdr-online-users {
+  position: fixed;
+  display: block;
+  top: 10px;
+  z-index: 220;
+}
+body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users {
+  left: 14px;
+  right: auto;
+}
+body:has(#game-screen.active) > #hdr-online-users {
+  top: 54px;
+  right: 14px;
+  left: auto;
+}
+body > #hdr-online-users .hdr-online-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+}
+body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users .hdr-online-popover {
+  right: auto;
+  left: 0;
+  width: min(220px, calc(100vw - 24px));
+}
+.lobby-online-mark { color: #39a868; font-size: .84rem; }
+
+@media (max-width: 640px) {
+  #setup-screen { padding: 42px 14px 44px; }
+  #setup-screen .history-corner-control { top: 8px; right: 9px; }
+  .setup-center { min-height: calc(100dvh - 86px); padding: 18px 4px 30px; }
+  .logo-title { font-size: clamp(2.5rem, 12vw, 3.3rem); }
+  .logo-sub { font-size: .7rem; }
+  #setup-screen:not(:has(.auth-status .auth-logged-in)) .logo-block { margin-bottom: 58px; }
+  #setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-section { width: min(100%, 356px); }
+  #setup-screen:has(.auth-status .auth-logged-in) { padding-top: 52px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .setup-center { padding: 22px 0 30px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .logo-block { margin-bottom: 28px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-grid { width: min(100%, 372px); gap: 12px; }
+  .lobby-card { min-height: 148px; padding: 13px 9px; border-width: 2px; border-radius: 22px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .auth-status { top: 10px; right: 10px; left: auto; }
+  #setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in { font-size: .65rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .auth-name { font-size: .66rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .setup-footer-info { margin-top: 28px; }
+  .setup-footer-info { margin-top: 58px; font-size: .68rem; }
+  .footer { font-size: .61rem; }
+  body:has(#game-screen.active) > #hdr-online-users { top: 54px; right: 8px; left: auto; }
+  body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users { top: 9px; left: 10px; right: auto; }
+}
+@media (max-width: 370px) {
+  #setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-row { gap: 6px; }
+  #setup-screen:not(:has(.auth-status .auth-logged-in)) .auth-input { padding-left: 9px; padding-right: 9px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-grid { gap: 8px; }
+  .lobby-card { padding-inline: 7px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ==========================================================================
+   MODERN TWO-PATH LOBBY
+   ========================================================================== */
+#setup-screen:has(.auth-status .auth-logged-in) {
+  padding-top: 48px;
+  background:
+    radial-gradient(ellipse at 50% 8%, rgba(37, 111, 76, .2), transparent 42%),
+    radial-gradient(ellipse at 50% 100%, rgba(229, 185, 31, .06), transparent 50%),
+    #0b1213;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .setup-center {
+  width: min(100%, 900px);
+  max-width: 900px;
+  min-height: calc(100dvh - 70px);
+  padding: 30px 20px 42px;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .logo-block { margin-bottom: 22px; }
+#setup-screen:has(.auth-status .auth-logged-in) .logo-title {
+  font-size: clamp(2.6rem, 6vw, 4.2rem);
+  letter-spacing: .13em;
+  text-shadow: 0 8px 36px rgba(229, 185, 31, .2);
+}
+#setup-screen:has(.auth-status .auth-logged-in) .logo-sub {
+  font-size: .73rem;
+  letter-spacing: .58em;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .logo-suits { margin-top: 9px; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-status {
+  top: 14px;
+  right: 18px;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in { font-size: .76rem; }
+#setup-screen:has(.auth-status .auth-logged-in) .auth-name { color: #72d49b; }
+#setup-screen:has(.auth-status .auth-logged-in) .profile-strip {
+  width: min(100%, 820px);
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 14px 17px;
+  border: 1px solid rgba(227, 236, 229, .12);
+  border-radius: 16px;
+  background: linear-gradient(115deg, rgba(24, 41, 34, .94), rgba(15, 24, 24, .92));
+  box-shadow: 0 15px 35px rgba(0, 0, 0, .22);
+}
+#setup-screen:has(.auth-status .auth-logged-in) .profile-avatar {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(229, 185, 31, .34);
+  border-radius: 14px;
+  background: rgba(229, 185, 31, .1);
+  color: #f0cf5a;
+  font-size: .8rem;
+  font-weight: 900;
+  letter-spacing: .05em;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .profile-main { min-width: 0; }
+#setup-screen:has(.auth-status .auth-logged-in) .profile-label,
+#setup-screen:has(.auth-status .auth-logged-in) .mode-eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(219, 229, 221, .49);
+  font-size: .62rem;
+  font-weight: 800;
+  letter-spacing: .15em;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .profile-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#setup-screen:has(.auth-status .auth-logged-in) #name-input {
+  width: min(100%, 290px);
+  height: 38px;
+  padding: 8px 12px;
+  border: 1px solid rgba(230, 235, 231, .13);
+  border-radius: 9px;
+  background: rgba(4, 10, 10, .48);
+  color: #f1f4f1;
+  font-size: .84rem;
+  font-weight: 700;
+}
+#setup-screen:has(.auth-status .auth-logged-in) #name-input[readonly] { cursor: default; }
+#setup-screen:has(.auth-status .auth-logged-in) #name-input:not([readonly]) {
+  border-color: rgba(229, 185, 31, .6);
+  background: rgba(5, 12, 12, .78);
+}
+#edit-name-btn {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid rgba(229, 185, 31, .32);
+  border-radius: 9px;
+  background: rgba(229, 185, 31, .08);
+  color: #e6c85a;
+  font-size: .72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease;
+}
+#edit-name-btn:hover { background: rgba(229, 185, 31, .16); border-color: rgba(229, 185, 31, .55); }
+#setup-screen:has(.auth-status .auth-logged-in) .profile-name-hint {
+  color: rgba(219, 229, 221, .42);
+  font-size: .68rem;
+  text-align: right;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-grid {
+  width: min(100%, 820px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 16px;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-card {
+  min-height: 306px;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 13px;
+  padding: 21px;
+  border: 1px solid rgba(231, 239, 232, .12);
+  border-radius: 18px;
+  background: linear-gradient(155deg, rgba(21, 33, 31, .96), rgba(12, 19, 20, .98));
+  box-shadow: 0 20px 44px rgba(0, 0, 0, .22);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(229, 185, 31, .27);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, .3);
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-bot-card {
+  border-color: rgba(94, 190, 130, .22);
+  background:
+    radial-gradient(ellipse at 100% 0, rgba(62, 150, 96, .16), transparent 48%),
+    linear-gradient(155deg, rgba(19, 39, 31, .97), rgba(12, 19, 20, .98));
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-card-heading,
+#setup-screen:has(.auth-status .auth-logged-in) .online-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .online-card-heading { justify-content: space-between; }
+#setup-screen:has(.auth-status .auth-logged-in) .mode-icon {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  font-size: .68rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .bot-mode-icon {
+  border: 1px solid rgba(100, 203, 143, .27);
+  background: rgba(81, 182, 122, .12);
+  color: #7cdda1;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-card-title {
+  margin: 0;
+  color: #f0f2ef;
+  font-size: 1.08rem;
+  text-align: left;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-eyebrow { margin-bottom: 4px; }
+#setup-screen:has(.auth-status .auth-logged-in) .mode-description {
+  min-height: 38px;
+  color: rgba(224, 231, 225, .65);
+  font-size: .79rem;
+  line-height: 1.5;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-action {
+  width: 100%;
+  min-height: 43px;
+  padding: 11px 15px;
+  border-radius: 10px;
+  font-size: .82rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .18s ease, filter .18s ease, opacity .18s ease;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-action:not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.12); }
+#setup-screen:has(.auth-status .auth-logged-in) .mode-action:disabled { opacity: .45; cursor: not-allowed; }
+#setup-screen:has(.auth-status .auth-logged-in) .mode-action-bot {
+  border: 1px solid #348b58;
+  background: linear-gradient(135deg, #246d43, #1e5938);
+  color: #effff3;
+  box-shadow: 0 10px 22px rgba(34, 107, 65, .2);
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-footnote {
+  color: rgba(211, 224, 215, .4);
+  font-size: .66rem;
+  line-height: 1.45;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-online-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid rgba(63, 174, 104, .23);
+  border-radius: 999px;
+  background: rgba(43, 141, 79, .1);
+  color: #6bca8e;
+  font-size: .63rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-online-mark { font-size: .58rem; }
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-online-card .mode-description { min-height: 0; }
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-online-list {
+  width: 100%;
+  max-height: 166px;
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid rgba(225, 235, 227, .09);
+  border-radius: 11px;
+  background: rgba(2, 9, 9, .33);
+  font-size: .76rem;
+}
+.lobby-player-choice {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 37px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .025);
+  color: #e7ede8;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .16s ease, border-color .16s ease;
+}
+.lobby-player-choice:not(.is-busy):hover { background: rgba(229, 185, 31, .065); }
+.lobby-player-choice.is-selected:not(.is-busy) {
+  border-color: rgba(229, 185, 31, .28);
+  background: rgba(229, 185, 31, .08);
+}
+.lobby-player-choice.is-busy,
+.lobby-player-choice:disabled { color: rgba(231, 237, 232, .42); cursor: not-allowed; }
+.lobby-player-check {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(231, 237, 232, .3);
+  border-radius: 6px;
+  color: #07120d;
+  font-size: .82rem;
+  font-weight: 900;
+}
+.lobby-player-choice.is-selected .lobby-player-check {
+  border-color: #55bc7a;
+  background: #55bc7a;
+}
+.lobby-player-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lobby-player-state { color: #62c987; font-size: .65rem; white-space: nowrap; }
+.lobby-player-choice.is-busy .lobby-player-state { color: #a7aaa7; }
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-online-empty {
+  align-self: center;
+  margin: auto;
+  color: rgba(221, 226, 222, .48);
+  font-size: .76rem;
+  text-align: center;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .invite-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .lobby-selected-count {
+  color: rgba(211, 224, 215, .51);
+  font-size: .67rem;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .mode-action-invite {
+  width: auto;
+  min-width: 145px;
+  border: 1px solid rgba(229, 185, 31, .46);
+  background: rgba(229, 185, 31, .11);
+  color: #ecd064;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .xiili-row {
+  gap: 10px;
+  margin-top: 18px;
+  color: rgba(228, 234, 229, .7);
+  font-size: .76rem;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .xiili-select {
+  padding: 7px 11px;
+  border: 1px solid rgba(229, 185, 31, .2);
+  border-radius: 8px;
+  background: #121e1c;
+  color: #edf0e9;
+  font-size: .76rem;
+}
+#setup-screen:has(.auth-status .auth-logged-in) .setup-footer-info {
+  margin-top: 20px;
+  color: rgba(205, 211, 208, .33);
+}
+#setup-screen .history-corner-control { top: 47px; right: 16px; }
+.game-invite-box { width: min(420px, 92vw); text-align: left; }
+.game-invite-box .modal-title { text-align: left; color: #f0cf5a; }
+.game-invite-box .modal-body { text-align: left; }
+.invite-modal-kicker {
+  display: block;
+  margin-bottom: 8px;
+  color: #70c992;
+  font-size: .68rem;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+.game-invite-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.game-invite-actions button {
+  min-height: 40px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: .8rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.invite-decline { border: 1px solid rgba(255,255,255,.17); background: rgba(255,255,255,.05); color: #d6dad6; }
+.invite-accept { border: 1px solid #378c59; background: #216d42; color: #f0fff4; }
+.game-invite-actions button:disabled { opacity: .55; cursor: wait; }
+
+@media (max-width: 640px) {
+  #setup-screen:has(.auth-status .auth-logged-in) { padding: 47px 14px 44px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .setup-center {
+    width: 100%;
+    min-height: calc(100dvh - 50px);
+    padding: 24px 0 34px;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .logo-block { margin-bottom: 17px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .logo-title { font-size: clamp(2.5rem, 12vw, 3.35rem); }
+  #setup-screen:has(.auth-status .auth-logged-in) .logo-sub { font-size: .67rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .profile-strip {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 10px;
+    padding: 11px;
+    margin-bottom: 12px;
+    border-radius: 13px;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .profile-avatar { width: 38px; height: 38px; border-radius: 12px; font-size: .69rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .profile-name-hint { display: none; }
+  #setup-screen:has(.auth-status .auth-logged-in) #name-input { width: 100%; height: 36px; font-size: .78rem; }
+  #edit-name-btn { padding: 7px 8px; font-size: .66rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-grid { grid-template-columns: 1fr; gap: 12px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-card { min-height: 0; padding: 16px; gap: 11px; border-radius: 15px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-online-list { min-height: 90px; max-height: 150px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .setup-footer-info { margin-top: 18px; }
+  #setup-screen .history-corner-control { top: 42px; right: 10px; }
+  #setup-screen .btn-history-open { padding: 6px 8px; font-size: .62rem; }
+  #setup-screen:has(.auth-status .auth-logged-in) .auth-status { top: 9px; right: 9px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .auth-logged-in { font-size: .64rem; }
+}
+
+/* Name tag selector and phone-friendly lobby controls. */
+.name-locale-select {
+  flex: 0 0 auto;
+  min-width: 58px;
+  height: 38px;
+  padding: 0 7px;
+  border: 1px solid rgba(229, 185, 31, .32);
+  border-radius: 9px;
+  background: rgba(4, 10, 10, .62);
+  color: #e8cf68;
+  font-size: .72rem;
+  font-weight: 800;
+}
+.bot-mode-icon, .friends-mode-icon { font-size: 1.25rem !important; }
+.lobby-player-choice { min-height: 42px; }
+#btn-send-invites { min-height: 42px; }
+
+@media (max-width: 768px) {
+  html:has(#setup-screen.active) {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    position: static;
+  }
+  body:has(#setup-screen.active) {
+    height: auto;
+    min-height: 100dvh;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    position: static;
+    touch-action: pan-y;
+  }
+}
+
+@media (max-width: 640px) {
+  #setup-screen:has(.auth-status .auth-logged-in) .profile-edit-row { gap: 5px; }
+  #setup-screen:has(.auth-status .auth-logged-in) #name-input {
+    flex: 1 1 82px;
+    width: auto;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .name-locale-select {
+    min-width: 52px;
+    height: 36px;
+    padding-inline: 4px;
+    border-radius: 7px;
+    font-size: .66rem;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) #edit-name-btn {
+    min-height: 36px;
+    padding: 6px 7px;
+    white-space: nowrap;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-player-choice {
+    min-height: 46px;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    padding-inline: 9px;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-online-card {
+    order: -1;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .lobby-grid {
+    position: relative;
+    z-index: 2;
+  }
+  #setup-screen:has(.auth-status .auth-logged-in) .invite-actions { gap: 8px; }
+  #setup-screen:has(.auth-status .auth-logged-in) .mode-action-invite {
+    min-width: 132px;
+    min-height: 42px;
+    padding: 8px 10px;
+    font-size: .72rem;
+  }
 }
 

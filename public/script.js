@@ -22,15 +22,19 @@ let turnTimeLeft = 30;
 let turnTimerInterval = null;
 let lastTurnStartTime = 0;
 let dragStartIndex = null;
+let handGroups = [];
 let waitingAutoTimer = null;
 let waitingCountdown = 10;
 let inGame = false;
 let lastPickedDiscardId = null;
 let lastDrawnCardId = null;
 let mustDiscardCardId = null;
+let pendingDiscardPickupCard = null;
 let currentRoomNumber = null;
 let onlineUsers = [];
 let publicClientIpPromise = null;
+let selectedInviteSocketIds = new Set();
+let activeGameInvite = null;
 
 // ─── Xiili (Season) Fooro Tracking ────────────────────────────────────────────
 let sessionFooros = {};   // fallback: { playerName: { fooros, wins } }
@@ -48,12 +52,34 @@ let winnerHistoryData = { totalGames: 0, players: [], games: [] };
 
 const SESSION_KEY = 't101_token';
 const PROFILE_KEY = 't101_profile';
+const AUTH_TOKEN_KEY = 't101_authToken';
 const SCORES_KEY  = 't101_sessionScores';
 const TARGET_KEY  = 't101_xiiliTarget';
+const GAME_NAME_KEY = 't101_gameName';
 const PENDING_RESUME_KEY = 't101_pendingResume';
+let myAuthToken = null;
 let pendingResumeRequested = false;
 let pendingNextGame = false;
 let socketRoomReady = false;
+let pendingNameConflictNoticeUntil = 0;
+
+function getGameDisplayName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/(?:\s+\((?:so|se)\))+\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 10)
+    .trim();
+}
+
+function updateGameNamePreview() {
+  const input = $('name-input');
+  const hint = $('profile-name-hint');
+  if (hint) {
+    const shownName = getGameDisplayName(input?.value || myProfileData?.name || '');
+    hint.textContent = shownName ? `Ciyaarta: ${shownName}` : 'Magacan ayaa ciyaarta ka muuqanaya';
+  }
+}
 
 function escapeHistoryHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -197,7 +223,8 @@ function getPendingResume(name = '') {
     if (!raw) return null;
     const pending = JSON.parse(raw);
     const isExpired = !pending?.savedAt || Date.now() - pending.savedAt > 24 * 60 * 60 * 1000;
-    const nameMatches = !name || normalizeName(pending.name) === normalizeName(name);
+    const stripLocale = value => String(value || '').replace(/\s+\((?:so|se)\)$/i, '').trim();
+    const nameMatches = !name || normalizeName(stripLocale(pending.name)) === normalizeName(stripLocale(name));
     if (isExpired || !pending.token || !pending.name || !nameMatches) {
       if (isExpired) localStorage.removeItem(PENDING_RESUME_KEY);
       return null;
@@ -572,16 +599,79 @@ function getPublicClientIp() {
   return publicClientIpPromise;
 }
 
-function announceOnlineProfile(profile = myProfileData) {
-  const name = String(profile?.name || '').trim();
+function announceOnlineProfile(profile = myProfileData, { notifyOnNameConflict = false } = {}) {
+  const nameInput = $('name-input');
+  const name = getGameDisplayName(nameInput?.value || profile?.name || '');
   if (!name || !socket?.connected) return;
+  const announcedProfileName = String(profile?.name || '').trim();
+  const announcedAuthToken = myAuthToken;
 
   getPublicClientIp().then(publicIp => {
-    if (!socket?.connected) return;
-    const data = { name };
+    if (
+      !socket?.connected ||
+      announcedProfileName !== String(myProfileName || '').trim() ||
+      announcedAuthToken !== myAuthToken
+    ) return;
+    const data = {
+      name,
+      profileName: announcedProfileName,
+      authToken: announcedAuthToken,
+      notifyOnNameConflict,
+    };
     if (publicIp) data.publicIp = publicIp;
+    if (notifyOnNameConflict) {
+      pendingNameConflictNoticeUntil = Date.now() + 3000;
+    }
     socket.emit('setOnlineProfile', data);
   });
+}
+
+function updateInviteSelectionUi() {
+  const countEl = $('lobby-selected-count');
+  const inviteBtn = $('btn-send-invites');
+  const selectedCount = selectedInviteSocketIds.size;
+  if (countEl) countEl.textContent = `${selectedCount + 1}/4 kursi`;
+  if (inviteBtn) inviteBtn.disabled = selectedCount === 0 || !socket?.connected;
+}
+
+function renderLobbyInviteList(users) {
+  const lobbyListEl = $('lobby-online-list');
+  const countEl = $('lobby-online-count');
+  const candidates = users.filter(user =>
+    user?.socketId && user.socketId !== socket?.id
+  );
+  const selectableIds = new Set(candidates
+    .filter(user => !user.busy)
+    .map(user => user.socketId));
+
+  selectedInviteSocketIds = new Set(
+    [...selectedInviteSocketIds].filter(id => selectableIds.has(id))
+  );
+  if (countEl) countEl.textContent = String(candidates.length);
+  if (lobbyListEl) {
+    lobbyListEl.innerHTML = candidates.length
+      ? candidates.map(user => {
+          const busy = Boolean(user.busy);
+          const checked = selectedInviteSocketIds.has(user.socketId);
+          const state = busy ? (user.busyLabel || 'Mashquul') : 'Online';
+          return `
+            <button
+              class="lobby-player-choice${busy ? ' is-busy' : ''}${checked ? ' is-selected' : ''}"
+              type="button"
+              data-socket-id="${escapeHistoryHtml(user.socketId)}"
+              aria-pressed="${checked ? 'true' : 'false'}"
+              aria-label="Casuun ${escapeHistoryHtml(user.name)}"
+              ${busy ? 'disabled' : ''}
+            >
+              <span class="lobby-player-check" aria-hidden="true">${checked ? '✓' : ''}</span>
+              <span class="lobby-player-name">${escapeHistoryHtml(user.name)}</span>
+              <span class="lobby-player-state">${escapeHistoryHtml(state)}</span>
+            </button>
+          `;
+        }).join('')
+      : '<span class="lobby-online-empty">Ma jiro ciyaartoy online ah.</span>';
+  }
+  updateInviteSelectionUi();
 }
 
 function renderOnlineUsers(data = {}) {
@@ -594,7 +684,7 @@ function renderOnlineUsers(data = {}) {
 
   onlineUsers = users;
   const count = Number.isFinite(Number(data.count)) ? Number(data.count) : users.length;
-  if (countEl) countEl.textContent = `${count} online`;
+  if (countEl) countEl.textContent = `Online ${count} qof`;
   if (totalEl) totalEl.textContent = String(count);
   if (!listEl) return;
 
@@ -611,6 +701,8 @@ function renderOnlineUsers(data = {}) {
       `;
       }).join('')
     : '<div class="hdr-online-empty">Qof online ah ma jiro.</div>';
+
+  renderLobbyInviteList(users);
 }
 
 function toggleOnlineUsers(forceOpen) {
@@ -1005,6 +1097,8 @@ function makeCard(card, size, opts = {}) {
     (isRed ? ' red-suit' : ' black-suit') +
     (isFromDiscard ? ' badda-card' : '');
 
+  if (opts.rotated) el.classList.add('rotated');
+
   const cv = document.createElement('div');
   cv.className = 'cv';
   cv.textContent = card.value;
@@ -1027,6 +1121,21 @@ function makeCard(card, size, opts = {}) {
     badge.textContent = '★';
     el.appendChild(badge);
   }
+
+  if (typeof opts.onRotate === 'function') {
+    const rotateButton = document.createElement('button');
+    rotateButton.type = 'button';
+    rotateButton.className = 'card-rotate-button';
+    rotateButton.textContent = '↻';
+    rotateButton.title = `Jeedi kaarka ${card.value}${card.suit}`;
+    rotateButton.setAttribute('aria-label', `Jeedi kaarka ${card.value}${card.suit}`);
+    rotateButton.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      opts.onRotate();
+    });
+    el.appendChild(rotateButton);
+  }
   return el;
 }
 
@@ -1034,6 +1143,100 @@ function makeCardBack(size) {
   const el = document.createElement('div');
   el.className = `card-back-${size}`;
   return el;
+}
+
+function getHandCardElement(cardId) {
+  const cards = $('hand-cards')?.querySelectorAll('.card[data-card-id]');
+  if (!cards) return null;
+  return [...cards].find(card => card.dataset.cardId === String(cardId)) || null;
+}
+
+function animateCardFlight(fromElement, toElement, card, options = {}) {
+  if (!toElement) return;
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  if (
+    !fromElement ||
+    (!card && !options.faceDown) ||
+    prefersReducedMotion ||
+    typeof document.createElement('div').animate !== 'function'
+  ) {
+    toElement.classList.remove('card-arriving');
+    return;
+  }
+
+  const from = fromElement.getBoundingClientRect();
+  const to = toElement.getBoundingClientRect();
+  if (from.width < 2 || from.height < 2 || to.width < 2 || to.height < 2) {
+    toElement.classList.remove('card-arriving');
+    return;
+  }
+
+  const flight = document.createElement('div');
+  flight.className = 'card-flight';
+  flight.style.left = `${from.left}px`;
+  flight.style.top = `${from.top}px`;
+  flight.style.width = `${from.width}px`;
+  flight.style.height = `${from.height}px`;
+
+  const inner = document.createElement('div');
+  inner.className = 'card-flight-inner';
+  const back = document.createElement('div');
+  back.className = 'card-flight-back';
+  const face = makeCard(card || { value: '', suit: '♠' }, 'lg');
+  face.classList.add('card-flight-face');
+  inner.append(back, face);
+  if (options.faceDown) inner.style.transform = 'rotateY(180deg)';
+
+  const hand = document.createElement('span');
+  hand.className = 'card-flight-hand';
+  hand.setAttribute('aria-hidden', 'true');
+  hand.textContent = '👋';
+  flight.append(inner, hand);
+  document.body.appendChild(flight);
+
+  const dx = to.left - from.left;
+  const dy = to.top - from.top;
+  const scaleX = to.width / from.width;
+  const scaleY = to.height / from.height;
+  const arc = Math.min(44, Math.max(12, Math.hypot(dx, dy) * 0.075));
+  const midScaleX = (1 + scaleX) / 2;
+  const midScaleY = (1 + scaleY) / 2;
+  const duration = 620;
+  const movement = flight.animate([
+    { transform: 'translate3d(0, 0, 0) rotate(-9deg) scale(1)' },
+    {
+      transform: `translate3d(${dx * 0.55}px, ${dy * 0.55 - arc}px, 0) rotate(7deg) scale(${midScaleX}, ${midScaleY})`,
+      offset: 0.55,
+    },
+    { transform: `translate3d(${dx}px, ${dy}px, 0) rotate(0deg) scale(${scaleX}, ${scaleY})` },
+  ], {
+    duration,
+    easing: 'cubic-bezier(.22,.7,.22,1)',
+    fill: 'forwards',
+  });
+
+  if (options.fromStock || options.fromBack) {
+    inner.animate([
+      { transform: 'rotateY(180deg)' },
+      { transform: 'rotateY(180deg)', offset: 0.38 },
+      { transform: 'rotateY(0deg)' },
+    ], {
+      duration,
+      easing: 'ease-in-out',
+      fill: 'forwards',
+    });
+  }
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    flight.remove();
+    toElement.classList.remove('card-arriving');
+  };
+  movement.onfinish = cleanup;
+  movement.oncancel = cleanup;
+  window.setTimeout(cleanup, duration + 250);
 }
 
 function renderHeader() {
@@ -1067,8 +1270,11 @@ function renderHand() {
   const container = $('hand-cards');
   if (!container) return;
   container.innerHTML = '';
-  myHand.forEach((card, idx) => {
+  pruneHandGroups();
+  const appendHandCard = (card, idx, parent = container) => {
     const el = makeCard(card, 'md', { selected: card.selected });
+    el.dataset.cardId = String(card.id ?? '');
+    el.dataset.handIndex = String(idx);
     if (card.fromDiscard) {
       el.style.border = '3px solid #ffcc00';
       el.style.boxShadow = '0 0 12px #ffcc00';
@@ -1088,8 +1294,37 @@ function renderHand() {
     });
     el.addEventListener('dragover', e => e.preventDefault());
     el.addEventListener('drop', () => handleDrop(idx));
-    container.appendChild(el);
+    parent.appendChild(el);
+  };
+
+  const renderedIds = new Set();
+  handGroups.forEach((group, groupIndex) => {
+    const cards = myHand
+      .map((card, idx) => ({ card, idx }))
+      .filter(({ card }) => group.includes(String(card.id)));
+    if (cards.length < 2) return;
+
+    const groupEl = document.createElement('div');
+    groupEl.className = 'hand-card-group';
+    groupEl.dataset.groupIndex = String(groupIndex + 1);
+    groupEl.setAttribute('aria-label', `Kooxda ${groupIndex + 1}`);
+    cards.forEach(({ card, idx }) => {
+      renderedIds.add(String(card.id));
+      appendHandCard(card, idx, groupEl);
+    });
+    container.appendChild(groupEl);
   });
+
+  myHand.forEach((card, idx) => {
+    if (!renderedIds.has(String(card.id))) appendHandCard(card, idx);
+  });
+
+  const selectedCount = myHand.filter(card => card.selected).length;
+  const groupButton = $('btn-group-selected');
+  const ungroupButton = $('btn-ungroup-selected');
+  if (groupButton) groupButton.disabled = selectedCount < 2;
+  if (ungroupButton) ungroupButton.disabled = selectedCount === 0 ||
+    !handGroups.some(group => group.some(id => myHand.some(card => card.selected && String(card.id) === id)));
 
   const selScore = myHand.filter(c => c.selected).reduce((s, c) => s + cardPoints(c), 0);
   const selScoreEl = $('sel-score');
@@ -1134,7 +1369,14 @@ function makeDraggableSet(set, setIdx, targetPlayerId) {
   setDiv.className = 'opened-set';
   if (set && Array.isArray(set)) {
     sortMeldCards(set).forEach((card, ci) => {
-      if (card) setDiv.appendChild(makeCard(card, 'sm', { overlap: ci > 0 }));
+      if (!card) return;
+      setDiv.appendChild(makeCard(card, 'sm', {
+        overlap: ci > 0,
+        rotated: Number(card.rotation) === 90,
+        onRotate: targetPlayerId === socket?.id
+          ? () => rotateOpenedCard(card.id)
+          : undefined,
+      }));
     });
   }
   setDiv.addEventListener('dragover', (e) => {
@@ -1296,6 +1538,33 @@ function renderOpponents() {
   });
 }
 
+function getOpponentCardAnchor(playerId) {
+  if (!socket?.id || !Array.isArray(players) || players.length < 2) return null;
+  const myIndex = players.findIndex(player => player?.id === socket.id);
+  const playerIndex = players.findIndex(player => player?.id === playerId);
+  if (myIndex < 0 || playerIndex < 0 || playerIndex === myIndex) return null;
+
+  const offset = (playerIndex - myIndex + players.length) % players.length;
+  const position = offset === 1 ? 'right' : offset === 2 ? 'top' : offset === 3 ? 'left' : null;
+  if (!position) return null;
+  const cardsEl = $(`cards-${position}`);
+  return cardsEl?.querySelector('.card-back-sm') || cardsEl || $(`badge-${position}`);
+}
+
+function animateOtherPlayerCardMotion(data) {
+  if (!data?.playerId || data.playerId === socket?.id) return;
+  const opponentHand = getOpponentCardAnchor(data.playerId);
+  if (!opponentHand) return;
+
+  if (data.action === 'draw-stock') {
+    animateCardFlight($('stock-pile-display'), opponentHand, null, { faceDown: true });
+  } else if (data.action === 'draw-discard' && data.card) {
+    animateCardFlight($('discard-display'), opponentHand, data.card);
+  } else if (data.action === 'discard' && data.card) {
+    animateCardFlight(opponentHand, $('discard-display'), data.card, { fromBack: true });
+  }
+}
+
 function renderMyBadge() {
   const badge = $('my-name-badge');
   if (!badge) return;
@@ -1332,6 +1601,47 @@ function handleSort() {
   });
   myHand = myHand.map(c => ({ ...c, selected: false }));
   renderHand();
+}
+
+function pruneHandGroups() {
+  const cardsInHand = new Set(myHand.map(card => String(card.id)));
+  handGroups = handGroups
+    .map(group => group.filter(id => cardsInHand.has(String(id))))
+    .filter(group => group.length > 1);
+}
+
+function groupSelectedCards() {
+  const selectedIds = myHand
+    .filter(card => card.selected)
+    .map(card => String(card.id));
+  if (selectedIds.length < 2) {
+    showNotification('Dooro ugu yaraan laba kaar si aad koox ugu samayso.');
+    return;
+  }
+
+  const selected = new Set(selectedIds);
+  handGroups = handGroups
+    .map(group => group.filter(id => !selected.has(String(id))))
+    .filter(group => group.length > 1);
+  handGroups.push(selectedIds);
+  renderHand();
+  showNotification('Kaararkii la doortay koox ayay noqdeen.', 1600);
+}
+
+function ungroupSelectedCards() {
+  const selectedIds = new Set(
+    myHand.filter(card => card.selected).map(card => String(card.id))
+  );
+  if (!selectedIds.size) return;
+  handGroups = handGroups
+    .map(group => group.filter(id => !selectedIds.has(String(id))))
+    .filter(group => group.length > 1);
+  renderHand();
+}
+
+function rotateOpenedCard(cardId) {
+  if (!socket || cardId === undefined || cardId === null) return;
+  socket.emit('rotateOpenedCard', { cardId: String(cardId) });
 }
 
 function handleDraw() {
@@ -1536,6 +1846,9 @@ function handleTuur() {
     return;
   }
 
+  const cardInHand = getHandCardElement(cardToPlay.id);
+  animateCardFlight(cardInHand, $('discard-display'), cardToPlay);
+
   const discardEl = $('discard-display');
   if (discardEl) {
     discardEl.classList.remove('card-throw-anim');
@@ -1601,11 +1914,69 @@ function renderWaitingRoom(plist) {
   if (humanCount >= 2 || plist.length >= 4) { stopWaitingCountdown(); const noteEl = $('waiting-auto-note'); if (noteEl) noteEl.textContent = ''; }
 }
 
-async function joinGame() {
+function sendGameInvites() {
+  if (!socket?.connected) {
+    showNotification('Xiriirka server-ka lama helin. Sug wax yar oo mar kale isku day.');
+    return;
+  }
+  const name = getGameDisplayName($('name-input')?.value || myProfileData?.name || '');
+  const targetSocketIds = [...selectedInviteSocketIds].slice(0, 3);
+  if (!name) {
+    showNotification('Fadlan geli magaca ciyaarta.');
+    return;
+  }
+  if (!targetSocketIds.length) {
+    showNotification('Dooro ugu yaraan hal saaxiib oo online ah.');
+    return;
+  }
+
+  const xiiliTarget = parseInt($('xiili-select')?.value, 10) || 5;
+  const inviteBtn = $('btn-send-invites');
+  if (inviteBtn) {
+    inviteBtn.disabled = true;
+    inviteBtn.textContent = 'Casuumaad diraysa...';
+  }
+  socket.emit('invitePlayers', {
+    name,
+    profileName: myProfileName,
+    authToken: myAuthToken,
+    xiiliTarget,
+    targetSocketIds,
+  });
+}
+
+function respondToGameInvite(decision) {
+  if (!activeGameInvite || !socket?.connected) return;
+  const name = getGameDisplayName($('name-input')?.value || myProfileData?.name || '');
+  const acceptBtn = $('btn-accept-game-invite');
+  const declineBtn = $('btn-decline-game-invite');
+  if (acceptBtn) acceptBtn.disabled = true;
+  if (declineBtn) declineBtn.disabled = true;
+  socket.emit('respondGameInvite', {
+    inviteId: activeGameInvite.inviteId,
+    decision,
+    name,
+    profileName: myProfileName,
+    authToken: myAuthToken,
+  });
+}
+
+function closeGameInvite() {
+  const modal = $('game-invite-modal');
+  const acceptBtn = $('btn-accept-game-invite');
+  const declineBtn = $('btn-decline-game-invite');
+  if (modal) modal.classList.add('hidden');
+  if (acceptBtn) acceptBtn.disabled = false;
+  if (declineBtn) declineBtn.disabled = false;
+  activeGameInvite = null;
+}
+
+async function joinGame(mode = 'random') {
   const nameInput = $('name-input');
-  const name = nameInput ? nameInput.value.trim() : '';
+  let name = getGameDisplayName(nameInput?.value || myProfileData?.name || '');
   if (!name) { showNotification('Fadlan geli magacaaga!'); return; }
   const pendingResume = getPendingResume(name);
+  if (pendingResume) name = pendingResume.name;
   myName = name;
   inGame = false;
   players = [];
@@ -1621,6 +1992,8 @@ async function joinGame() {
   const payload = myProfileName
     ? { name, profileName: myProfileName, xiiliTarget }
     : { name, xiiliTarget };
+  if (myAuthToken) payload.authToken = myAuthToken;
+  if (mode === 'bots') payload.mode = 'bots';
   if (pendingResume) payload.token = pendingResume.token;
   const publicIp = await getPublicClientIp();
   if (publicIp) payload.publicIp = publicIp;
@@ -1651,34 +2024,63 @@ async function authPost(url, body) {
 async function authRegister(name, pin) { return authPost('/api/auth/register', { name, pin }); }
 async function authLogin(name, pin) { return authPost('/api/auth/login', { name, pin }); }
 
-function setLoggedIn(profile) {
+function setLoggedIn(profile, authToken) {
   myProfileName = profile.name;
   myProfileData = profile;
+  myAuthToken = authToken;
   try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); } catch (e) {}
+  try { localStorage.setItem(AUTH_TOKEN_KEY, authToken); } catch (e) {}
   const nameInput = $('name-input');
-  if (nameInput) nameInput.value = profile.name;
+  if (nameInput) {
+    let savedGameName = '';
+    try { savedGameName = localStorage.getItem(GAME_NAME_KEY) || ''; } catch (e) {}
+    nameInput.value = String(savedGameName || profile.name).trim().slice(0, 10);
+  }
+  updateGameNamePreview();
   renderAuthStatus();
   announceOnlineProfile(profile);
 }
 
 function setLoggedOut() {
+  const shouldReload = ['waiting-screen', 'game-screen'].some(id =>
+    $(`${id}`)?.classList.contains('active'),
+  );
+  if (shouldReload) window.t101SkipResumeSave = true;
+  clearPendingResume();
+  pendingResumeRequested = false;
   if (socket?.connected) socket.emit('clearOnlineProfile');
+  if (shouldReload && socket?.connected) socket.emit('leaveGame');
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {}
+  myAuthToken = null;
   myProfileName = null;
   myProfileData = null;
   try { localStorage.removeItem(PROFILE_KEY); } catch (e) {}
+  try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
   renderAuthStatus();
+  if (shouldReload) {
+    setTimeout(() => location.reload(), 150);
+  } else {
+    showNotification('Waad ka baxday akoonka. Marti ahaan waad sii ciyaari kartaa.', 3000);
+  }
 }
 
 function restoreSavedProfile() {
   try {
     const raw = localStorage.getItem(PROFILE_KEY);
+    const authToken = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!raw) return;
     const profile = JSON.parse(raw);
-    if (!profile || !profile.name) return;
+    if (!profile || !profile.name || !authToken) return;
     myProfileName = profile.name;
     myProfileData = profile;
+    myAuthToken = authToken;
     const nameInput = $('name-input');
-    if (nameInput) nameInput.value = profile.name;
+    if (nameInput) {
+      let savedGameName = '';
+      try { savedGameName = localStorage.getItem(GAME_NAME_KEY) || ''; } catch (e) {}
+      nameInput.value = String(savedGameName || profile.name).trim().slice(0, 10);
+    }
+    updateGameNamePreview();
   } catch (e) {}
 }
 
@@ -1691,10 +2093,10 @@ function renderAuthStatus() {
     const sign = myProfileData.score >= 0 ? '+' : '';
     statusEl.innerHTML = `
       <div class="auth-logged-in">
-        <span class="auth-name">👤 ${myProfileData.name}</span>
+        <span class="auth-name">${myProfileData.name}</span>
         <span class="auth-score">Guud: ${sign}${myProfileData.score} dhibco</span>
         <span class="auth-stats">(${myProfileData.wins} guul · ${myProfileData.fooros} fooro/guuldarro · ${myProfileData.games} ciyaar)</span>
-        <button class="btn-auth-small btn-auth-logout" onclick="setLoggedOut()">Ka bax</button>
+        <button type="button" class="btn-auth-small btn-auth-logout" title="Ka bax akoonka" aria-label="Ka bax akoonka" onclick="setLoggedOut()">Logout</button>
       </div>`;
     loginArea.classList.add('hidden');
   } else {
@@ -1724,9 +2126,18 @@ async function handleAuthSubmit(mode) {
   const result = await authPost(endpoint, { name, pin });
 
   if (result.ok) {
-    setLoggedIn(result.profile);
+    if (!result.authToken) {
+      if (errEl) errEl.textContent = 'Server-ka weli lama cusboonaysiin. Dib u bilow server-ka kadibna mar kale gal.';
+      return;
+    }
+    setLoggedIn(result.profile, result.authToken);
     if (errEl) errEl.textContent = '';
-    showNotification(mode === 'register' ? `✅ Xisabta la furey! Soo dhowow ${result.profile.name}` : `✅ Soo galootay! ${result.profile.name}`, 4000);
+    const successMessage = result.existing
+      ? `✅ Soo dhowow mar kale ${result.profile.name}`
+      : mode === 'register'
+        ? `✅ Xisabta la furey! Soo dhowow ${result.profile.name}`
+        : `✅ Soo galootay! ${result.profile.name}`;
+    showNotification(successMessage, 4000);
   } else {
     if (errEl) errEl.textContent = result.error || 'Khalad ayaa dhacay';
   }
@@ -2366,6 +2777,7 @@ function wipeAllSessionMemory(reason) {
     clearSessionScores();
     try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {}
     try { localStorage.removeItem(PROFILE_KEY); } catch (e) {}
+    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
     updateFooroPanel();
     if (reason) console.warn('[t101] Xasuustii waa la tirtiray:', reason);
   } catch (e) { console.error(e); }
@@ -2406,13 +2818,14 @@ function initSocket() {
     socketRoomReady = false;
     hideReconnectOverlay();
     cancelServerOfflineWipe();
+    updateInviteSelectionUi();
     announceOnlineProfile();
     if (inGame && myName) {
       const storedToken = sessionStorage.getItem(SESSION_KEY);
       if (storedToken && socket) {
         getPublicClientIp().then(publicIp => {
           const reconnPayload = myProfileName
-            ? { name: myName, profileName: myProfileName, xiiliTarget, token: storedToken }
+            ? { name: myName, profileName: myProfileName, authToken: myAuthToken, xiiliTarget, token: storedToken }
             : { name: myName, xiiliTarget, token: storedToken };
           if (publicIp) reconnPayload.publicIp = publicIp;
           if (socket?.connected) socket.emit('joinRandom', reconnPayload);
@@ -2453,6 +2866,61 @@ function handleGameOverData(resultsFromBackendOrLogic) {
   });
   socket.on('sessionToken', token => { if (token) sessionStorage.setItem(SESSION_KEY, token); });
   socket.on('onlineUsersUpdate', data => renderOnlineUsers(data));
+  socket.on('nameTaken', data => {
+    if (Date.now() > pendingNameConflictNoticeUntil) return;
+    pendingNameConflictNoticeUntil = 0;
+    showNotification(data?.message || 'Magacan ciyaarta hore ayaa loo isticmaalayaa. Dooro magac kale.');
+  });
+  socket.on('joinRejected', data => {
+    stopWaitingCountdown();
+    pendingResumeRequested = false;
+    inGame = false;
+    sessionStorage.removeItem(SESSION_KEY);
+    showScreen('setup');
+    showNotification(data?.message || 'Magacan ciyaarta hore ayaa loo isticmaalayaa. Dooro magac kale.');
+  });
+  socket.on('inviteRoomCreated', data => {
+    renderRoomLabel(data?.roomNumber);
+    showScreen('waiting');
+    const inviteBtn = $('btn-send-invites');
+    if (inviteBtn) inviteBtn.textContent = 'Casuum ciyaar';
+    showNotification(`Qolka ${data?.roomNumber || ''} waa diyaar — casuumaadaha waa la diray.`, 4500);
+  });
+  socket.on('inviteError', data => {
+    const inviteBtn = $('btn-send-invites');
+    if (inviteBtn) inviteBtn.textContent = 'Casuum ciyaar';
+    updateInviteSelectionUi();
+    showNotification(data?.message || 'Casuumaadda lama diri karin.');
+  });
+  socket.on('gameInvite', data => {
+    activeGameInvite = data;
+    const modal = $('game-invite-modal');
+    const message = $('game-invite-message');
+    if (message) message.textContent = `${data?.inviterName || 'Ciyaaryahan'} ayaa kugu casuumay qolka ${data?.roomNumber || ''}.`;
+    if (modal) modal.classList.remove('hidden');
+  });
+  socket.on('gameInviteAccepted', data => {
+    closeGameInvite();
+    renderRoomLabel(data?.roomNumber);
+    showScreen('waiting');
+  });
+  socket.on('gameInviteFailed', data => {
+    closeGameInvite();
+    showNotification(data?.message || 'Casuumaadda lama aqbali karin.');
+  });
+  socket.on('gameInviteClosed', data => {
+    if (activeGameInvite?.inviteId === data?.inviteId) closeGameInvite();
+    if (data?.reason === 'expired') showNotification('Waqtigii casuumaaddu wuu dhammaaday.', 3500);
+  });
+  socket.on('gameInviteStatus', data => {
+    const messages = {
+      accepted: `${data?.playerName || 'Ciyaaryahan'} wuu aqbalay casuumaadda.`,
+      declined: `${data?.playerName || 'Ciyaaryahan'} wuu diiday casuumaadda.`,
+      expired: `Casuumaadda ${data?.playerName || 'ciyaaryahan'} way dhacday.`,
+      unavailable: `${data?.playerName || 'Ciyaaryahan'} hadda lama heli karo.`,
+    };
+    if (messages[data?.status]) showNotification(messages[data.status], 3500);
+  });
 
   socket.on('waitingRoomUpdate', data => {
     renderRoomLabel(data?.roomNumber);
@@ -2471,6 +2939,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     inGame = true;
     isMyTurn = false;
     currentTurnId = null;
+    handGroups = [];
     myHand = hand.map(c => ({ ...c, selected: false, fromDiscard: false }));
     lastPickedDiscardId = null;
     lastDrawnCardId = null;
@@ -2551,6 +3020,7 @@ function handleGameOverData(resultsFromBackendOrLogic) {
   socket.on('yourTurn', () => { isMyTurn = true; startTurnTimer(); showNotification('DOORKAAGA!', 2000); renderAll(); });
   socket.on('updateDiscardPile', card => { discardTop = card; renderDiscardPile(); });
   socket.on('updateStockCount', count => { stockCount = count; renderStockPile(); });
+  socket.on('cardMotion', animateOtherPlayerCardMotion);
 
   socket.on('receiveCard', card => {
     myHand.push({ ...card, selected: false, fromDiscard: false });
@@ -2560,9 +3030,19 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     lastDrawnCardId = card.id;
     mustDiscardCardId = null;
     renderHand();
+    const handCard = getHandCardElement(card.id);
+    const handContainer = $('hand-cards');
+    if (handCard && handContainer && handContainer.scrollWidth > handContainer.clientWidth) {
+      handContainer.scrollLeft = handContainer.scrollWidth;
+    }
+    if (handCard) {
+      handCard.classList.add('card-arriving');
+      animateCardFlight($('stock-pile-display'), handCard, card, { fromStock: true });
+    }
   });
 
   socket.on('discardPickedSuccess', (data) => {
+    pendingDiscardPickupCard = data?.card || null;
     hasDrawn = true; pickedFromDiscard = true; lastPickedDiscardId = data.card.id;
     lastDrawnCardId = null;
     mustDiscardCardId = null;
@@ -2589,6 +3069,15 @@ function handleGameOverData(resultsFromBackendOrLogic) {
       myHand.push(...freshHand);
     }
     renderHand();
+    const pickedCard = pendingDiscardPickupCard;
+    pendingDiscardPickupCard = null;
+    if (pickedCard && data?.hand?.some(card => card.id === pickedCard.id)) {
+      const handCard = getHandCardElement(pickedCard.id);
+      if (handCard) {
+        handCard.classList.add('card-arriving');
+        animateCardFlight($('discard-display'), handCard, pickedCard);
+      }
+    }
   });
 
   socket.on('meldRejected', data => {
@@ -3321,6 +3810,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   loadSessionScores();
   restoreSavedProfile();
+  updateGameNamePreview();
   const _tl = $('fooro-target-label');
   if (_tl) _tl.textContent = `${xiiliTarget} Fooro`;
   const _xs = $('xiili-select');
@@ -3345,7 +3835,73 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (joinBtn) joinBtn.addEventListener('click', joinGame);
   const nameInput = $('name-input');
-  if (nameInput) nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') joinGame(); });
+  const editNameBtn = $('edit-name-btn');
+  if (editNameBtn && nameInput) {
+    editNameBtn.addEventListener('click', () => {
+      if (nameInput.readOnly) {
+        nameInput.readOnly = false;
+        editNameBtn.textContent = 'Kaydi';
+        editNameBtn.setAttribute('aria-pressed', 'true');
+        nameInput.focus();
+        nameInput.select();
+        return;
+      }
+      const cleanName = nameInput.value.trim()
+        .replace(/(?:\s+\((?:so|se)\))+\s*$/i, '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 10)
+        .trim();
+      if (!cleanName) {
+        showNotification('Magaca ciyaarta madhnaan ma noqon karo.');
+        nameInput.focus();
+        return;
+      }
+      nameInput.value = cleanName;
+      nameInput.readOnly = true;
+      editNameBtn.textContent = 'Wax ka beddel';
+      editNameBtn.setAttribute('aria-pressed', 'false');
+      try { localStorage.setItem(GAME_NAME_KEY, cleanName); } catch (e) {}
+      updateGameNamePreview();
+      if (myProfileData) announceOnlineProfile(myProfileData, { notifyOnNameConflict: true });
+    });
+  }
+  if (nameInput) nameInput.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (nameInput.readOnly) joinGame();
+    else editNameBtn?.click();
+  });
+  const playBotsBtn = $('btn-play-bots');
+  if (playBotsBtn) playBotsBtn.addEventListener('click', () => joinGame('bots'));
+  const inviteList = $('lobby-online-list');
+  if (inviteList) inviteList.addEventListener('click', event => {
+    const choice = event.target.closest('button.lobby-player-choice');
+    if (!choice || choice.disabled) return;
+    const socketId = choice.dataset.socketId;
+    if (!socketId) return;
+    const isSelected = selectedInviteSocketIds.has(socketId);
+    if (!isSelected) {
+      if (selectedInviteSocketIds.size >= 3) {
+        showNotification('Miisku 4 kursi ayuu leeyahay: adiga iyo ilaa 3 saaxiib.');
+        return;
+      }
+      selectedInviteSocketIds.add(socketId);
+    } else {
+      selectedInviteSocketIds.delete(socketId);
+    }
+    const checked = selectedInviteSocketIds.has(socketId);
+    choice.classList.toggle('is-selected', checked);
+    choice.setAttribute('aria-pressed', String(checked));
+    const mark = choice.querySelector('.lobby-player-check');
+    if (mark) mark.textContent = checked ? '✓' : '';
+    updateInviteSelectionUi();
+  });
+  const inviteBtn = $('btn-send-invites');
+  if (inviteBtn) inviteBtn.addEventListener('click', sendGameInvites);
+  const acceptInviteBtn = $('btn-accept-game-invite');
+  const declineInviteBtn = $('btn-decline-game-invite');
+  if (acceptInviteBtn) acceptInviteBtn.addEventListener('click', () => respondToGameInvite('accept'));
+  if (declineInviteBtn) declineInviteBtn.addEventListener('click', () => respondToGameInvite('decline'));
   const btnDraw = $('btn-draw');
   if (btnDraw) btnDraw.addEventListener('click', handleDraw);
   const btnPickDiscard = $('btn-pick-discard');
@@ -3356,6 +3912,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnReset) btnReset.addEventListener('click', handleReset);
   const btnSort = $('btn-sort');
   if (btnSort) btnSort.addEventListener('click', handleSort);
+  const btnGroupSelected = $('btn-group-selected');
+  if (btnGroupSelected) btnGroupSelected.addEventListener('click', groupSelectedCards);
+  const btnUngroupSelected = $('btn-ungroup-selected');
+  if (btnUngroupSelected) btnUngroupSelected.addEventListener('click', ungroupSelectedCards);
   const btnTuur = $('btn-tuur');
   if (btnTuur) btnTuur.addEventListener('click', handleTuur);
 

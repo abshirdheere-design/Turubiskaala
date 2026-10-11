@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, copyFileSync, readdirSync } from 'node:fs';
 import { extname, join, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,7 @@ import { explainGameOver } from './gameover-explanation-engine.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
+const AUTH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function hasIndexFile(directory) {
   try {
@@ -196,6 +198,7 @@ function resolvePublicFile(requestPath) {
 
   // Do not allow a URL to escape the selected public directory.
   if (exactPath !== publicRoot && !exactPath.startsWith(`${publicRoot}${sep}`)) return null;
+  if (relativePath.split(/[\\/]/).some(part => part.toLowerCase() === '.turubka-auth-secret')) return null;
   if (existsSync(exactPath)) return exactPath;
 
   // Uploaded assets can be named index_123.html, script_123.js, and
@@ -264,15 +267,42 @@ const httpServer = createServer((req, res) => {
           res.end(JSON.stringify({ ok: false, error: 'Magaca iyo 4-digit PIN ayaa loo baahan yahay' }));
           return;
         }
-        if (getProfile(cleanName)) {
-          res.writeHead(409, apiHeaders);
-          res.end(JSON.stringify({ ok: false, error: 'Magacaan horey loo diiwaangaliyay' }));
+        const existingProfile = getProfile(cleanName);
+        if (existingProfile) {
+          if (existingProfile.pin !== String(pin)) {
+            res.writeHead(409, apiHeaders);
+            res.end(JSON.stringify({
+              ok: false,
+              error: 'Magacaan hore ayuu u diiwaangashan yahay. Dooro Gal oo geli PIN-ka saxda ah.',
+            }));
+            return;
+          }
+
+          // Haddii qofku isku dayo diiwaangelin isagoo wata magac iyo PIN sax
+          // ah, u aqoonso akoonkiisii hore halkii magaca loo diidi lahaa.
+          const authToken = createProfileAuthToken(existingProfile);
+          res.writeHead(200, apiHeaders);
+          res.end(JSON.stringify({
+            ok: true,
+            existing: true,
+            profile: publicProfile(existingProfile),
+            authToken,
+          }));
           return;
         }
+        const authToken = createProfileAuthToken({ name: cleanName });
         const profile = createProfile(cleanName, String(pin));
         res.writeHead(200, apiHeaders);
-        res.end(JSON.stringify({ ok: true, profile: { name: profile.name, score: 0, wins: 0, fooros: 0, games: 0 } }));
-      } catch { res.writeHead(400, apiHeaders); res.end(JSON.stringify({ ok: false, error: 'Khalad' })); }
+        res.end(JSON.stringify({
+          ok: true,
+          profile: publicProfile(profile),
+          authToken,
+        }));
+      } catch {
+        if (res.headersSent || res.writableEnded) return;
+        res.writeHead(400, apiHeaders);
+        res.end(JSON.stringify({ ok: false, error: 'Khalad' }));
+      }
     });
     return;
   }
@@ -289,9 +319,18 @@ const httpServer = createServer((req, res) => {
           res.end(JSON.stringify({ ok: false, error: 'Magaca ama PIN-ku waa khalad' }));
           return;
         }
+        const authToken = createProfileAuthToken(profile);
         res.writeHead(200, apiHeaders);
-        res.end(JSON.stringify({ ok: true, profile: { name: profile.name, score: profile.score, wins: profile.wins, fooros: profile.fooros, games: profile.games } }));
-      } catch { res.writeHead(400, apiHeaders); res.end(JSON.stringify({ ok: false, error: 'Khalad' })); }
+        res.end(JSON.stringify({
+          ok: true,
+          profile: publicProfile(profile),
+          authToken,
+        }));
+      } catch {
+        if (res.headersSent || res.writableEnded) return;
+        res.writeHead(400, apiHeaders);
+        res.end(JSON.stringify({ ok: false, error: 'Khalad' }));
+      }
     });
     return;
   }
@@ -407,6 +446,67 @@ function validateProfile(name, pin) {
   const profile = getProfile(name);
   if (!profile || profile.pin !== String(pin)) return null;
   return profile;
+}
+
+let cachedAuthTokenSecret = '';
+
+function getAuthTokenSecret() {
+  const configuredSecret = String(process.env.SESSION_SECRET || '');
+  if (configuredSecret) return configuredSecret;
+  if (cachedAuthTokenSecret) return cachedAuthTokenSecret;
+
+  const secretPath = join(DATA_DIR, '.turubka-auth-secret');
+  if (existsSync(secretPath)) {
+    const savedSecret = readFileSync(secretPath, 'utf8').trim();
+    if (savedSecret.length < 32) throw new Error('Saved authentication secret is invalid.');
+    cachedAuthTokenSecret = savedSecret;
+    return savedSecret;
+  }
+
+  const generatedSecret = randomBytes(48).toString('base64url');
+  try {
+    writeFileSync(secretPath, generatedSecret, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    cachedAuthTokenSecret = generatedSecret;
+    return generatedSecret;
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const savedSecret = readFileSync(secretPath, 'utf8').trim();
+    if (savedSecret.length < 32) throw new Error('Saved authentication secret is invalid.');
+    cachedAuthTokenSecret = savedSecret;
+    return savedSecret;
+  }
+}
+
+function createProfileAuthToken(profile) {
+  const secret = getAuthTokenSecret();
+  const payload = Buffer.from(JSON.stringify({
+    sub: profileKey(profile.name),
+    exp: Date.now() + AUTH_TOKEN_TTL_MS,
+  })).toString('base64url');
+  const signature = createHmac('sha256', secret).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function getAuthenticatedProfile(data) {
+  const token = String(data?.authToken || '');
+  const [payload, encodedSignature, extra] = token.split('.');
+  if (!payload || !encodedSignature || extra !== undefined) return null;
+
+  try {
+    const secret = getAuthTokenSecret();
+    const expectedSignature = createHmac('sha256', secret).update(payload).digest();
+    const actualSignature = Buffer.from(encodedSignature, 'base64url');
+    if (
+      actualSignature.length !== expectedSignature.length ||
+      !timingSafeEqual(actualSignature, expectedSignature)
+    ) return null;
+
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!claims?.sub || !Number.isFinite(claims.exp) || claims.exp <= Date.now()) return null;
+    return getProfile(claims.sub) || null;
+  } catch {
+    return null;
+  }
 }
 
 function getLeaderboardData() {
@@ -1926,8 +2026,66 @@ const HUMAN_TIMEOUTS_BEFORE_BOT = 3;
 // Browser-ku haddii uu si kama' ah u xirmo kadib game-over,
 // ciyaartoygu ha haysto waqti ku filan oo uu isla room-ka ugu soo laabto.
 const RECONNECT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const GAME_INVITE_TTL_MS = 60 * 1000;
 const rooms = {};
 const onlineProfiles = new Map();
+const gameInvites = new Map();
+
+function cleanGameName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/(?:\s+\((?:so|se)\))+\s*$/i, '')
+    .trim()
+    .slice(0, 15)
+    .trim();
+}
+
+function normalizeGameName(value) {
+  return cleanGameName(value).toLowerCase();
+}
+
+function isGameNameTaken(name, exceptSocketId, includeDisconnectedPlayers = true, authenticatedProfileName = null) {
+  const nameKey = normalizeGameName(name);
+  if (!nameKey) return false;
+  const authenticatedProfileKey = authenticatedProfileName ? profileKey(authenticatedProfileName) : '';
+
+  for (const profile of onlineProfiles.values()) {
+    const sameAccount = authenticatedProfileKey &&
+      profile?.profileName &&
+      profileKey(profile.profileName) === authenticatedProfileKey;
+    if (
+      profile?.socketId &&
+      profile.socketId !== exceptSocketId &&
+      !sameAccount &&
+      normalizeGameName(profile.name) === nameKey
+    ) {
+      return true;
+    }
+  }
+
+  for (const room of Object.values(rooms)) {
+    for (const player of room.players || []) {
+      const sameDisconnectedAccount = authenticatedProfileKey &&
+        player?.profileName &&
+        profileKey(player.profileName) === authenticatedProfileKey &&
+        !player.online;
+      if (
+        player &&
+        !player.isBot &&
+        !sameDisconnectedAccount &&
+        (includeDisconnectedPlayers || player.online) &&
+        player.id !== exceptSocketId &&
+        normalizeGameName(player.name) === nameKey
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 function allocateRoomNumber() {
   const used = new Set(
@@ -1942,6 +2100,58 @@ function allocateRoomNumber() {
 
 function genToken() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function createRoomState(xiiliTarget = 5, inviteOnly = false) {
+  const id = 'Room_' + Math.random().toString(36).slice(2, 11);
+  const room = {
+    id, players: [], gameStarted: false, stockPile: [], discardPile: [],
+    roomNumber: allocateRoomNumber(),
+    activePlayerIndex: 0, lastOpenPoints: 101, turnTimeout: null, turnStartTime: null,
+    lastProviderId: null, botFillTimer: null, isPaused: false, pauseTimeLeft: 0,
+    turnToken: 0, hasFirstOpened: false, firstOpenerId: null, firstOpenerOriginalPoints: null,
+    barrierFrozen: false, openedPlayerIds: new Set(), barrierHistory: [101],
+    playerStats: {}, moveHistory: [],
+    dabaaqPairs: [], activeDabaaqPairs: [],
+    sessionScores: {},
+    sessionId: allocateXiiliSessionId(),
+    xiiliTarget: xiiliTarget === 10 ? 10 : 5,
+    historyRecorded: false,
+    inviteOnly,
+  };
+  rooms[id] = room;
+  return room;
+}
+
+function createHumanPlayer(socket, name, profileName, sessionToken) {
+  return {
+    id: socket.id,
+    name: String(name || `User_${socket.id.slice(0, 4)}`).trim().replace(/\s+/g, ' ').slice(0, 15),
+    hand: [],
+    isOpened: false,
+    hasActioned: false,
+    turnDrewCard: false,
+    drewFromStock: false,
+    lastDrawnCardId: null,
+    mustDiscardCardId: null,
+    pickedFromDiscard: false,
+    lastPickedCardId: null,
+    dabaaqProviderId: null,
+    openedSets: [],
+    online: true,
+    points: 0,
+    tempScore: 0,
+    isBot: false,
+    autoBot: false,
+    autoBotAt: null,
+    timeoutStreak: 0,
+    hoosgale: false,
+    openProviderId: null,
+    sessionToken,
+    disconnectedAt: null,
+    profileName: profileName || null,
+    country: socket.playerData?.country || 'XX',
+  };
 }
 
 function getCardPoints(value) {
@@ -2528,18 +2738,26 @@ function getOnlineUsers() {
   for (const profile of onlineProfiles.values()) {
     if (!profile?.socketId || !profile.name) continue;
     users.set(profile.socketId, {
+      socketId: profile.socketId,
       name: profile.name,
       country: profile.country || 'XX',
+      busy: false,
+      busyLabel: '',
     });
   }
 
   for (const room of Object.values(rooms)) {
     for (const player of (room.players || [])) {
       if (!player || !player.online || player.isBot || !player.name) continue;
-      const key = player.id || player.sessionToken || `${room.id}:${player.name}`;
+      const key = player.id;
+      if (!key) continue;
+      const onlineProfile = onlineProfiles.get(key);
       users.set(key, {
-        name: player.name,
+        socketId: key,
+        name: onlineProfile?.name || player.name,
         country: player.country || 'XX',
+        busy: true,
+        busyLabel: room.gameStarted ? 'Ciyaar ayuu ku jiraa' : 'Qol sugaya',
       });
     }
   }
@@ -2555,6 +2773,36 @@ function broadcastOnlineUsers() {
     count: users.length,
     users,
   });
+}
+
+function endInvitesForSocket(socketId, reason = 'closed') {
+  for (const [inviteId, invitation] of gameInvites) {
+    if (invitation.inviterId === socketId) {
+      clearTimeout(invitation.timer);
+      gameInvites.delete(inviteId);
+      io.to(invitation.recipientId).emit('gameInviteClosed', { inviteId, reason });
+    } else if (invitation.recipientId === socketId) {
+      clearTimeout(invitation.timer);
+      gameInvites.delete(inviteId);
+      io.to(invitation.inviterId).emit('gameInviteStatus', {
+        status: 'offline',
+        playerName: invitation.recipientName,
+      });
+    }
+  }
+}
+
+function endInvitesForRoom(roomId, reason = 'room-started') {
+  for (const [inviteId, invitation] of gameInvites) {
+    if (invitation.roomId !== roomId) continue;
+    clearTimeout(invitation.timer);
+    gameInvites.delete(inviteId);
+    io.to(invitation.recipientId).emit('gameInviteClosed', { inviteId, reason });
+    io.to(invitation.inviterId).emit('gameInviteStatus', {
+      status: 'unavailable',
+      playerName: invitation.recipientName,
+    });
+  }
 }
 
 function updateRoomPlayers(roomId) {
@@ -2584,6 +2832,13 @@ function updateRoomPlayers(roomId) {
     barrierHistory: room.barrierHistory || [101],
     roomNumber: room.roomNumber,
   });
+}
+
+function broadcastCardMotion(roomId, playerId, action, card = null) {
+  if (!roomId || !playerId) return;
+  const movement = { playerId, action };
+  if (card) movement.card = card;
+  io.to(roomId).emit('cardMotion', movement);
 }
 
 function broadcastTableUI(roomId) {
@@ -2851,6 +3106,7 @@ function doBotTurn(roomId, botId) {
       cardIsInGroups(testGroups, topDiscard.id) &&
       testGroups.some(group => group.length >= 4);
     if (testScore >= getOpeningMinimum(room) && canUseDiscardToOpen) {
+      broadcastCardMotion(roomId, bot.id, 'draw-discard', topDiscard);
       room.discardPile.pop();
       const newCard = { ...topDiscard, fromDiscard: true };
       bot.hand.push(newCard);
@@ -2872,6 +3128,7 @@ function doBotTurn(roomId, botId) {
   // qaadasho samayn.
   if (!drewFromDiscard && bot.hand.length < 15 && room.stockPile.length > 0) {
     const card = room.stockPile.pop();
+    broadcastCardMotion(roomId, bot.id, 'draw-stock');
     bot.hand.push(card);
     bot.hasActioned = true;
     bot.turnDrewCard = true;
@@ -2951,6 +3208,7 @@ function doBotTurn(roomId, botId) {
         // kaarka mana tuuri karo kaar kale. Tuurista dib ugu celi oo doorka gudub.
         const returnedCard = returnPickedDiscard(room, bot);
         if (returnedCard) {
+          broadcastCardMotion(roomId, bot.id, 'discard', returnedCard);
           io.to(roomId).emit('updateDiscardPile', returnedCard);
           io.to(roomId).emit('botDiscardReturned', { botName: bot.name });
           updateRoomPlayers(roomId);
@@ -2967,6 +3225,7 @@ function doBotTurn(roomId, botId) {
       // ama mid kale tuuraya; haddii uusan gelin koox, dib ha ugu celiyo tuurista.
       const returnedCard = returnPickedDiscard(room, bot);
       if (returnedCard) {
+        broadcastCardMotion(roomId, bot.id, 'discard', returnedCard);
         io.to(roomId).emit('updateDiscardPile', returnedCard);
         io.to(roomId).emit('botDiscardReturned', { botName: bot.name });
         updateRoomPlayers(roomId);
@@ -3019,6 +3278,7 @@ function doBotTurn(roomId, botId) {
       if (di !== -1) bot.hand.splice(di, 1);
 
       room.discardPile.push(cardToDiscard);
+      broadcastCardMotion(roomId, bot.id, 'discard', cardToDiscard);
       io.to(roomId).emit('updateDiscardPile', cardToDiscard);
       if (bot.mustDiscardCardId === cardToDiscard.id) bot.mustDiscardCardId = null;
 
@@ -3297,22 +3557,219 @@ io.on('connection', socket => {
   };
 
   socket.on('setOnlineProfile', data => {
-    const name = String(data?.name || '').trim().slice(0, 80);
+    const name = cleanGameName(data?.name);
+    const authenticatedProfile = getAuthenticatedProfile(data);
+    const profileName = authenticatedProfile?.name || null;
     if (!name) return;
+    if (isGameNameTaken(name, socket.id, false, profileName)) {
+      if (data?.notifyOnNameConflict === true) {
+        socket.emit('nameTaken', {
+          message: 'Magacan ciyaarta qof kale ayaa isticmaalaya. Fadlan dooro magac kale.',
+        });
+      }
+      return;
+    }
 
     const publicIp = String(data?.publicIp || '').trim();
     if (publicIp) socket.playerData.country = getClientCountry(socket, publicIp);
 
+    if (profileName) {
+      for (const [otherSocketId, onlineProfile] of onlineProfiles) {
+        if (
+          otherSocketId !== socket.id &&
+          profileKey(onlineProfile?.profileName) === profileKey(profileName)
+        ) {
+          onlineProfiles.delete(otherSocketId);
+        }
+      }
+    }
     onlineProfiles.set(socket.id, {
       socketId: socket.id,
       name,
+      profileName,
       country: socket.playerData.country || 'XX',
     });
     broadcastOnlineUsers();
   });
 
   socket.on('clearOnlineProfile', () => {
+    endInvitesForSocket(socket.id, 'closed');
     if (onlineProfiles.delete(socket.id)) broadcastOnlineUsers();
+  });
+
+  socket.on('invitePlayers', data => {
+    const name = cleanGameName(data?.name);
+    const profileName = getAuthenticatedProfile(data)?.name || null;
+    const xiiliTarget = parseInt(data?.xiiliTarget, 10) === 10 ? 10 : 5;
+    const requestedIds = Array.isArray(data?.targetSocketIds)
+      ? [...new Set(data.targetSocketIds.map(id => String(id || '').slice(0, 128)))].slice(0, 3)
+      : [];
+    if (!name || !requestedIds.length) {
+      socket.emit('inviteError', { message: 'Magaca geli oo dooro ciyaartoy aad casuunto.' });
+      return;
+    }
+    if (isGameNameTaken(name, socket.id, true, profileName)) {
+      socket.emit('inviteError', {
+        message: 'Magacan ciyaarta qof kale ayaa isticmaalaya. Fadlan dooro magac kale.',
+      });
+      return;
+    }
+
+    const inviteTargets = requestedIds
+      .map(socketId => ({ socketId, profile: onlineProfiles.get(socketId) }))
+      .filter(({ socketId, profile }) => {
+        if (!profile || socketId === socket.id || !io.sockets.sockets.has(socketId)) return false;
+        return !Object.values(rooms).some(room =>
+          room.players.some(player => player.id === socketId && player.online)
+        );
+      });
+    if (!inviteTargets.length) {
+      socket.emit('inviteError', { message: 'Ciyaartoydii aad dooratay hadda lama heli karo.' });
+      broadcastOnlineUsers();
+      return;
+    }
+
+    const room = createRoomState(xiiliTarget, true);
+    const sessionToken = genToken();
+    room.players.push(createHumanPlayer(socket, name, profileName, sessionToken));
+    socket.join(room.id);
+    myRoomId = room.id;
+    socket.emit('sessionToken', sessionToken);
+    socket.emit('inviteRoomCreated', {
+      roomNumber: room.roomNumber,
+      invitedCount: inviteTargets.length,
+    });
+    io.to(room.id).emit('waitingRoomUpdate', {
+      players: room.players.map(player => ({ name: player.name, isBot: player.isBot })),
+      roomNumber: room.roomNumber,
+    });
+    broadcastSessionScores(room.id);
+    broadcastOnlineUsers();
+
+    for (const { socketId, profile } of inviteTargets) {
+      const inviteId = genToken();
+      const invitation = {
+        inviteId,
+        roomId: room.id,
+        inviterId: socket.id,
+        recipientId: socketId,
+        inviterName: name,
+        recipientName: profile.name,
+        roomNumber: room.roomNumber,
+        timer: null,
+      };
+      invitation.timer = setTimeout(() => {
+        if (gameInvites.get(inviteId) !== invitation) return;
+        gameInvites.delete(inviteId);
+        io.to(invitation.inviterId).emit('gameInviteStatus', {
+          status: 'expired',
+          playerName: invitation.recipientName,
+        });
+        io.to(invitation.recipientId).emit('gameInviteClosed', {
+          inviteId,
+          reason: 'expired',
+        });
+      }, GAME_INVITE_TTL_MS);
+      gameInvites.set(inviteId, invitation);
+      io.to(socketId).emit('gameInvite', {
+        inviteId,
+        inviterName: name,
+        roomNumber: room.roomNumber,
+        expiresAt: Date.now() + GAME_INVITE_TTL_MS,
+      });
+    }
+  });
+
+  socket.on('respondGameInvite', data => {
+    const inviteId = String(data?.inviteId || '').slice(0, 128);
+    const invitation = gameInvites.get(inviteId);
+    if (!invitation || invitation.recipientId !== socket.id) {
+      socket.emit('gameInviteFailed', { message: 'Casuumaaddu way dhacday ama mar dambe lama heli karo.' });
+      return;
+    }
+
+    const decision = String(data?.decision || '');
+    if (decision === 'decline') {
+      clearTimeout(invitation.timer);
+      gameInvites.delete(inviteId);
+      socket.emit('gameInviteClosed', { inviteId, reason: 'declined' });
+      io.to(invitation.inviterId).emit('gameInviteStatus', {
+        status: 'declined',
+        playerName: invitation.recipientName,
+      });
+      return;
+    }
+    if (decision !== 'accept') {
+      socket.emit('gameInviteFailed', { message: 'Jawaabta casuumaadda lama aqoonsan.' });
+      return;
+    }
+
+    const room = rooms[invitation.roomId];
+    const alreadyInRoom = Object.values(rooms).some(candidate =>
+      candidate.id !== invitation.roomId &&
+      candidate.players.some(player => player.id === socket.id && player.online)
+    );
+    if (!room || !room.inviteOnly || room.gameStarted || room.players.length >= 4 || alreadyInRoom) {
+      clearTimeout(invitation.timer);
+      gameInvites.delete(inviteId);
+      socket.emit('gameInviteFailed', { message: 'Qolku hadda buuxaa ama ciyaartu way bilaabatay.' });
+      io.to(invitation.inviterId).emit('gameInviteStatus', {
+        status: 'unavailable',
+        playerName: invitation.recipientName,
+      });
+      return;
+    }
+
+    const recipientProfile = onlineProfiles.get(socket.id);
+    const authenticatedProfile = getAuthenticatedProfile(data);
+    const playerName = cleanGameName(data?.name || recipientProfile?.name || invitation.recipientName);
+    if (!playerName) {
+      socket.emit('gameInviteFailed', { message: 'Magaca ciyaarta geli ka hor intaadan aqbalin.' });
+      return;
+    }
+    const profileName = authenticatedProfile?.name || recipientProfile?.profileName || null;
+    if (isGameNameTaken(playerName, socket.id, true, profileName)) {
+      socket.emit('gameInviteFailed', {
+        message: 'Magacan ciyaarta qof kale ayaa isticmaalaya. Fadlan dooro magac kale.',
+      });
+      return;
+    }
+
+    clearTimeout(invitation.timer);
+    gameInvites.delete(inviteId);
+    const sessionToken = genToken();
+    room.players.push(createHumanPlayer(socket, playerName, profileName, sessionToken));
+    socket.join(room.id);
+    myRoomId = room.id;
+    socket.emit('sessionToken', sessionToken);
+    socket.emit('gameInviteAccepted', { roomNumber: room.roomNumber });
+    io.to(room.id).emit('waitingRoomUpdate', {
+      players: room.players.map(player => ({ name: player.name, isBot: player.isBot })),
+      roomNumber: room.roomNumber,
+    });
+    broadcastSessionScores(room.id);
+    broadcastOnlineUsers();
+    io.to(invitation.inviterId).emit('gameInviteStatus', {
+      status: 'accepted',
+      playerName,
+    });
+
+    if (room.players.length === 4) {
+      for (const [pendingId, pendingInvite] of gameInvites) {
+        if (pendingInvite.roomId !== room.id) continue;
+        clearTimeout(pendingInvite.timer);
+        gameInvites.delete(pendingId);
+        io.to(pendingInvite.recipientId).emit('gameInviteClosed', {
+          inviteId: pendingId,
+          reason: 'room-full',
+        });
+        io.to(pendingInvite.inviterId).emit('gameInviteStatus', {
+          status: 'unavailable',
+          playerName: pendingInvite.recipientName,
+        });
+      }
+      startGame(room.id);
+    }
   });
 
   socket.on('sendChat', message => {
@@ -3331,9 +3788,10 @@ io.on('connection', socket => {
   });
 
   socket.on('joinRandom', (data) => {
-    const name = typeof data === 'string' ? data : data.name;
+    const name = cleanGameName(typeof data === 'string' ? data : data.name);
     const incomingToken = typeof data === 'string' ? null : data.token;
-    const profileName = typeof data === 'string' ? null : (data.profileName || null);
+    const profileName = typeof data === 'string' ? null : (getAuthenticatedProfile(data)?.name || null);
+    const mode = typeof data === 'string' ? 'random' : String(data.mode || 'random');
     const xiiliTarget = typeof data === 'string' ? 5 : (parseInt(data.xiiliTarget) || 5);
     const publicIp = typeof data === 'string' ? '' : String(data.publicIp || '').trim();
     if (publicIp) socket.playerData.country = getClientCountry(socket, publicIp);
@@ -3341,7 +3799,7 @@ io.on('connection', socket => {
     for (const id in rooms) {
       const room = rooms[id];
     const existing = room.players.find(p =>
-      p.name === name &&
+      normalizeGameName(p.name) === normalizeGameName(name) &&
       !p.online &&
       (!p.isBot || p.autoBot)
     );
@@ -3395,30 +3853,45 @@ io.on('connection', socket => {
       }
     }
 
+    if (!name) {
+      socket.emit('joinRejected', { message: 'Fadlan geli magac ciyaar.' });
+      return;
+    }
+    if (isGameNameTaken(name, socket.id, true, profileName)) {
+      socket.emit('joinRejected', {
+        message: 'Magacan ciyaarta qof kale ayaa isticmaalaya. Fadlan dooro magac kale.',
+      });
+      return;
+    }
+
+    if (mode === 'bots') {
+      const room = createRoomState(xiiliTarget);
+      const sessionToken = genToken();
+      room.players.push(createHumanPlayer(socket, name, profileName, sessionToken));
+      socket.join(room.id);
+      myRoomId = room.id;
+      socket.emit('sessionToken', sessionToken);
+      io.to(room.id).emit('waitingRoomUpdate', {
+        players: room.players.map(p => ({ name: p.name, isBot: p.isBot })),
+        roomNumber: room.roomNumber,
+      });
+      broadcastSessionScores(room.id);
+      broadcastOnlineUsers();
+      addBotsAndStartGame(room.id);
+      return;
+    }
+
     // Room game-over ah ha lagu darin ciyaar cusub oo random ah.
     // Ciyaartoydii hore waxay isla room-ka uga sii gudbi karaan ciyaarta
     // xigta iyagoo adeegsanaya forceResetGame, si session scores-ku u sii jiraan.
     let rid = Object.keys(rooms).find(id =>
       rooms[id].players.length < 4 &&
       !rooms[id].gameStarted &&
-      !rooms[id].historyRecorded
+      !rooms[id].historyRecorded &&
+      !rooms[id].inviteOnly
     );
     if (!rid) {
-      rid = 'Room_' + Math.random().toString(36).slice(2, 11);
-      rooms[rid] = {
-        id: rid, players: [], gameStarted: false, stockPile: [], discardPile: [],
-        roomNumber: allocateRoomNumber(),
-        activePlayerIndex: 0, lastOpenPoints: 101, turnTimeout: null, turnStartTime: null,
-        lastProviderId: null, botFillTimer: null, isPaused: false, pauseTimeLeft: 0,
-        turnToken: 0, hasFirstOpened: false, firstOpenerId: null, firstOpenerOriginalPoints: null,
-        barrierFrozen: false, openedPlayerIds: new Set(), barrierHistory: [101],
-        playerStats: {}, moveHistory: [],
-        dabaaqPairs: [], activeDabaaqPairs: [],
-        sessionScores: {},
-        sessionId: allocateXiiliSessionId(),
-        xiiliTarget: xiiliTarget,
-        historyRecorded: false,
-      };
+      rid = createRoomState(xiiliTarget).id;
     }
 
     const sessionToken = genToken();
@@ -3427,7 +3900,7 @@ io.on('connection', socket => {
     if (!room.gameStarted && room.players.length === 0) {
       room.xiiliTarget = xiiliTarget;
     }
-     room.players.push({ id: socket.id, name: name || `User_${socket.id.slice(0, 4)}`, hand: [], isOpened: false, hasActioned: false, turnDrewCard: false, drewFromStock: false, lastDrawnCardId: null, mustDiscardCardId: null, pickedFromDiscard: false, lastPickedCardId: null, dabaaqProviderId: null, openedSets: [], online: true, points: 0, tempScore: 0, isBot: false, autoBot: false, autoBotAt: null, timeoutStreak: 0, hoosgale: false, openProviderId: null, sessionToken, disconnectedAt: null, profileName: profileName || null, country: socket.playerData?.country || 'XX' });
+    room.players.push(createHumanPlayer(socket, name, profileName, sessionToken));
     socket.join(rid); myRoomId = rid;
     socket.emit('sessionToken', sessionToken);
      broadcastOnlineUsers();
@@ -3456,6 +3929,7 @@ io.on('connection', socket => {
     if (!myRoomId) { socket.emit('notification', 'Qolka la heli waayo.'); return; }
     const room = rooms[myRoomId]; if (!room || room.gameStarted) return;
     if (room.botFillTimer) { clearTimeout(room.botFillTimer); room.botFillTimer = null; }
+    if (room.inviteOnly) endInvitesForRoom(myRoomId, 'room-started');
     addBotsAndStartGame(myRoomId);
   });
 
@@ -3483,6 +3957,7 @@ io.on('connection', socket => {
       p.pickedFromDiscard = false;
       p.lastPickedCardId = null;
        recordHumanAction(p);
+      broadcastCardMotion(myRoomId, p.id, 'draw-stock');
       socket.emit('receiveCard', card);
       io.to(myRoomId).emit('updateStockCount', room.stockPile.length);
       updateRoomPlayers(myRoomId);
@@ -3514,6 +3989,7 @@ io.on('connection', socket => {
       p.lastPickedCardId = card.id;
        recordHumanAction(p);
       p.dabaaqProviderId = providerId || null;
+      broadcastCardMotion(myRoomId, p.id, 'draw-discard', card);
       socket.emit('discardPickedSuccess', { card });
       socket.emit('updateHand', { hand: p.hand });
       io.to(myRoomId).emit('updateDiscardPile', room.discardPile[room.discardPile.length - 1] ?? null);
@@ -3583,6 +4059,7 @@ io.on('connection', socket => {
     const discarded = p.hand.splice(idx, 1)[0];
     recordHumanAction(p);
     room.discardPile.push(discarded);
+    broadcastCardMotion(myRoomId, p.id, 'discard', discarded);
     io.to(myRoomId).emit('updateDiscardPile', discarded);
     socket.emit('updateHand', { hand: p.hand });
     if (p.mustDiscardCardId === discarded.id) p.mustDiscardCardId = null;
@@ -3755,6 +4232,23 @@ io.on('connection', socket => {
     broadcastTableUI(myRoomId); updateRoomPlayers(myRoomId);
     if (p.hand.length === 0) { endGame(myRoomId, p); return; }
 });
+
+  socket.on('rotateOpenedCard', data => {
+    const room = rooms[myRoomId];
+    if (!room || !room.gameStarted) return;
+    const player = room.players.find(candidate => candidate.id === socket.id);
+    if (!player?.isOpened) return;
+
+    const cardId = String(data?.cardId ?? '');
+    if (!cardId) return;
+    const card = (player.openedSets || [])
+      .flat()
+      .find(openedCard => String(openedCard?.id) === cardId);
+    if (!card) return;
+
+    card.rotation = Number(card.rotation) === 90 ? 0 : 90;
+    broadcastTableUI(myRoomId);
+  });
 
   socket.on('addToExistingSets', (data) => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
@@ -3966,9 +4460,12 @@ io.on('connection', socket => {
   socket.on('animation_finished', () => {});
 
   socket.on('leaveGame', () => {
-    const room = rooms[myRoomId]; if (!room) return;
+    const roomId = myRoomId;
+    const room = rooms[roomId]; if (!room) return;
+    endInvitesForSocket(socket.id, 'closed');
     if (!room.gameStarted) {
       room.players = room.players.filter(p => p.id !== socket.id);
+      if (room.inviteOnly && room.players.length === 0) delete rooms[roomId];
     } else {
       const pidx = room.players.findIndex(p => p.id === socket.id);
       if (pidx !== -1) {
@@ -3978,18 +4475,19 @@ io.on('connection', socket => {
         const leaving = room.players[pidx];
         leaving.isBot = true; leaving.name = botName; leaving.online = true;
         leaving.sessionToken = null; leaving.disconnectedAt = null;
-        updateRoomPlayers(myRoomId);
+        updateRoomPlayers(roomId);
         if (room.activePlayerIndex === pidx) {
           if (room.turnTimeout) clearTimeout(room.turnTimeout);
-          scheduleBotTurn(myRoomId, leaving.id);
+          scheduleBotTurn(roomId, leaving.id);
         }
       }
     }
      broadcastOnlineUsers();
-     socket.leave(myRoomId); myRoomId = '';
+     socket.leave(roomId); myRoomId = '';
   });
 
   socket.on('disconnect', () => {
+    endInvitesForSocket(socket.id, 'offline');
     onlineProfiles.delete(socket.id);
     broadcastOnlineUsers();
     const room = rooms[myRoomId]; if (!room) return;
@@ -4004,6 +4502,7 @@ io.on('connection', socket => {
     } else if (!room.gameStarted) {
       room.players = room.players.filter(p => p.id !== socket.id);
       if (room.botFillTimer && room.players.length === 0) { clearTimeout(room.botFillTimer); room.botFillTimer = null; }
+      if (room.inviteOnly && room.players.length === 0) delete rooms[myRoomId];
       broadcastOnlineUsers();
     } else {
       player.online = false; player.disconnectedAt = Date.now();

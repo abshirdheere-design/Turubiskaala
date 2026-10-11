@@ -1,4 +1,369 @@
 {
-  "games": [],
-  "players": {}
+  "games": [
+    {
+      "id": "game_1791387284069_657l4n",
+      "endedAt": "2026-10-07T15:34:44.069Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_mx90hru",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791387424709_4tos9d",
+      "endedAt": "2026-10-07T15:37:04.709Z",
+      "winner": "Abshir",
+      "winnerId": "B3QqVSJLA1SyH2jsAAAD",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791387642838_bqneja",
+      "endedAt": "2026-10-07T15:40:42.838Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_mx90hru",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791387927177_eviyzy",
+      "endedAt": "2026-10-07T15:45:27.177Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_mx90hru",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791388116132_hw3e1m",
+      "endedAt": "2026-10-07T15:48:36.132Z",
+      "winner": "Faarax",
+      "winnerId": "bot_snm1wpo",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791388364652_vrur2g",
+      "endedAt": "2026-10-07T15:52:44.652Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_mx90hru",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7zf8w5rju"
+    },
+    {
+      "id": "game_1791388650812_cc4p9h",
+      "endedAt": "2026-10-07T15:57:30.812Z",
+      "winner": "Jaamac",
+      "winnerId": "bot_dfzdbdt",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_eu224j7a6"
+    },
+    {
+      "id": "game_1791389940981_xhsg0b",
+      "endedAt": "2026-10-07T16:19:00.981Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_k5vldll",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_eu224j7a6"
+    },
+    {
+      "id": "game_1791390271038_el77fk",
+      "endedAt": "2026-10-07T16:24:31.038Z",
+      "winner": "Faarax",
+      "winnerId": "bot_irocisn",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_eu224j7a6"
+    },
+    {
+      "id": "game_1791408954746_3g8zz1",
+      "endedAt": "2026-10-07T21:35:54.746Z",
+      "winner": "Faarax",
+      "winnerId": "bot_5b8m2dm",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Yasir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_jziwkwl4u"
+    },
+    {
+      "id": "game_1791409558404_l59wqn",
+      "endedAt": "2026-10-07T21:45:58.404Z",
+      "winner": "Yasir",
+      "winnerId": "mgKykzlvrx6iY2k_AAAV",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Yasir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_7f69x88pa"
+    },
+    {
+      "id": "game_1791494003752_xdwir4",
+      "endedAt": "2026-10-08T21:13:23.752Z",
+      "winner": "Jimcaale",
+      "winnerId": "bot_2vjy4rd",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_3qgefnix4"
+    },
+    {
+      "id": "game_1791494319470_ndtgv7",
+      "endedAt": "2026-10-08T21:18:39.467Z",
+      "winner": "Jaamac",
+      "winnerId": "bot_8njid1d",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_3qgefnix4"
+    }
+  ],
+  "players": {
+    "ABSHIR": {
+      "name": "Abshir",
+      "gamesPlayed": 11,
+      "isBot": true
+    },
+    "JAAMAC": {
+      "name": "Jaamac",
+      "gamesPlayed": 13,
+      "isBot": true
+    },
+    "JIMCAALE": {
+      "name": "Jimcaale",
+      "gamesPlayed": 13,
+      "isBot": true
+    },
+    "FAARAX": {
+      "name": "Faarax",
+      "gamesPlayed": 13,
+      "isBot": true
+    },
+    "YASIR": {
+      "name": "Yasir",
+      "gamesPlayed": 2,
+      "isBot": true
+    }
+  }
 }

@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Turubka 101</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/style.css?v=20261011-card-groups" />
 </head>
 <body>
 
@@ -14,7 +15,7 @@
        si uusan ugu dul dhicin game header-ka ama footer-ka. -->
   <div class="history-corner-control">
     <button id="btn-open-winner-history" class="btn-history-open" type="button">
-      🏆 Taariikhda ciyaaraha
+      Taariikhda ciyaaraha
     </button>
   </div>
 
@@ -27,27 +28,64 @@
       </div>
     </div>
     
-    <p class="setup-hint">Fadlan geli magacaaga si aad u bilowdo</p>
-    <div class="setup-input-group">
-      <input id="name-input" type="text" placeholder="Magacaaga..." maxlength="15" autocomplete="off" />
-      <button id="join-btn">BILOW CIYAARTA</button>
+    <div class="profile-strip" aria-label="Magaca ciyaarta">
+      <div class="profile-avatar" aria-hidden="true">101</div>
+      <div class="profile-main">
+        <label for="name-input" class="profile-label">MAGACAAGA CIYAARTA</label>
+        <div class="profile-edit-row">
+          <input id="name-input" type="text" placeholder="Magacaaga..." maxlength="10" autocomplete="off" aria-label="Magacaaga ciyaarta" readonly />
+          
+          <button id="edit-name-btn" type="button" aria-pressed="false">Wax ka beddel</button>
+        </div>
+      </div>
+      <span id="profile-name-hint" class="profile-name-hint">Magacan ayaa ciyaarta ka muuqanaya</span>
+    </div>
+
+    <div class="lobby-grid" aria-label="Dooro habka ciyaarta">
+      <section class="lobby-card lobby-bot-card" aria-labelledby="bot-mode-title">
+        <div class="mode-card-heading">
+          <span class="mode-icon bot-mode-icon" aria-hidden="true">🤖</span>
+          <div>
+            <span class="mode-eyebrow">KELI AHAAN</span>
+            <h2 id="bot-mode-title" class="lobby-card-title">Bot la ciyaar</h2>
+          </div>
+        </div>
+        <p class="mode-description">Isla markiiba bilow. Saddex bot ayaa kuu buuxinaya miiska.</p>
+        <button id="btn-play-bots" class="mode-action mode-action-bot" type="button">Bilow ciyaarta bot-ka</button>
+        <span class="mode-footnote">4 ciyaartoy · Robotadu si toos ah ayay u ciyaaraan</span>
+      </section>
+
+      <section class="lobby-card lobby-online-card" aria-labelledby="friends-mode-title">
+        <div class="online-card-heading">
+          <span class="mode-icon friends-mode-icon" aria-hidden="true">👥</span>
+          <div>
+            <span class="mode-eyebrow">SAAXIIBBO</span>
+            <h2 id="friends-mode-title" class="lobby-card-title">Dadka online-ka ah</h2>
+          </div>
+          <span class="lobby-online-count"><span class="lobby-online-mark" aria-hidden="true">●</span><span id="lobby-online-count">0</span> ONLINE</span>
+        </div>
+        <p class="mode-description">Adiga iyo ilaa 3 saaxiib — miis 4 qof ah.</p>
+        <div id="lobby-online-list" class="lobby-online-list" aria-live="polite">
+          <span class="lobby-online-empty">Liiska ciyaartoyda waa la soo uruuriyay...</span>
+        </div>
+        <div class="invite-actions">
+          <span id="lobby-selected-count" class="lobby-selected-count">1/4 kursi</span>
+          <button id="btn-send-invites" class="mode-action mode-action-invite" type="button" disabled>Casuum ciyaar</button>
+        </div>
+      </section>
     </div>
 
     <!-- ─── Persistent Score Auth Section ─────────────────────────────── -->
     <div class="auth-section">
-      <div class="auth-divider"><span>Stats-ka Profile-ka (dhammaan ciyaaraha)</span></div>
       <div id="auth-status" class="auth-status"></div>
-      <p class="auth-profile-note">
-        Isdiiwaangali haddii aad rabto diiwaangelinta dhibcaha.
-      </p>
-      <div id="auth-login-area" class="auth-login-area">
+      <form id="auth-login-area" class="auth-login-area" onsubmit="event.preventDefault()">
         <div class="auth-row">
-          <input id="auth-name-input" type="text" placeholder="Magacaaga..." maxlength="15" autocomplete="off" class="auth-input" />
-          <input id="auth-pin-input" type="password" placeholder="PIN (4 lambar)" maxlength="4" pattern="\d{4}" inputmode="numeric" class="auth-input auth-pin" />
+          <input id="auth-name-input" type="text" placeholder="Magac gali" aria-label="Magacaaga" maxlength="15" autocomplete="username" class="auth-input" />
+          <input id="auth-pin-input" type="password" placeholder="Password" aria-label="PIN afar lambar ah" maxlength="4" pattern="\d{4}" inputmode="numeric" autocomplete="current-password" class="auth-input auth-pin" />
         </div>
         <div class="auth-row auth-btn-row">
-          <button id="btn-auth-login" class="btn-auth" onclick="handleAuthSubmit('login')">Gal</button>
-          <button id="btn-auth-register" class="btn-auth btn-auth-alt" style="display:none" onclick="handleAuthSubmit('register')">Diiwaangeli</button>
+          <button id="btn-auth-login" class="btn-auth" type="button" onclick="handleAuthSubmit('login')">Gal</button>
+          <button id="btn-auth-register" class="btn-auth btn-auth-alt" type="button" style="display:none" onclick="handleAuthSubmit('register')">Diiwaangeli</button>
         </div>
         <div class="auth-meta">
           <span id="auth-mode-label" class="auth-mode-label">Gal</span>
@@ -55,12 +93,12 @@
           <a id="auth-toggle-link" href="#" class="auth-toggle" onclick="event.preventDefault();toggleAuthMode()">Xisab cusub? Diiwaangeli</a>
         </div>
         <p id="auth-error" class="auth-error"></p>
-      </div>
+      </form>
     </div>
 
     <!-- Xiili selector -->
     <div class="xiili-row">
-      <label for="xiili-select" class="xiili-label">🏁 Ku ciyaar:</label>
+      <label for="xiili-select" class="xiili-label">Xadka dhibcaha:</label>
       <select id="xiili-select" class="xiili-select">
         <option value="5">5 Fooro</option>
         <option value="10">10 Fooro</option>
@@ -77,7 +115,7 @@
   <div class="waiting-box">
     <!-- Pool Matchmaking Animation Icon -->
     <div class="pool-animation-container">
-      <div class="pool-card-spinner">🃏</div>
+      <div class="pool-card-spinner" aria-hidden="true"><span>♠</span><span class="red">♥</span><span>♣</span><span class="red">♦</span></div>
       <div class="pool-radar-pulse"></div>
     </div>
 
@@ -90,7 +128,7 @@
     <div class="waiting-bot-section">
       <div class="waiting-divider"><span>ama</span></div>
       <button id="btn-add-bots" class="btn-bots">
-        🤖 Ku ciyaar Robots (3 Robot)
+        Ku ciyaar Robots (3 Robot)
       </button>
       <p class="waiting-bot-note">Haddaadan ciyaartoy helin, 3 robot ayaa kaa ciyaara</p>
       <p class="waiting-auto-note" id="waiting-auto-note"></p>
@@ -108,25 +146,12 @@
       <span id="hdr-name" class="gold bold"></span>
        <span id="hdr-room-label" class="room-label">Qolka —</span>
       <span id="hdr-opened-badge" class="badge-opened hidden">&#x2B05; Degay</span>
-      <div id="hdr-online-users" class="hdr-online-users">
-        <button id="hdr-online-toggle" class="hdr-online-toggle" type="button" aria-expanded="false" aria-controls="hdr-online-popover">
-          <span class="online-dot">●</span>
-          <span id="hdr-online-count">0 online</span>
-        </button>
-        <div id="hdr-online-popover" class="hdr-online-popover hidden">
-          <div class="hdr-online-title">
-            <span>Dadka toos ugu jira</span>
-            <span id="hdr-online-total">0</span>
-          </div>
-          <div id="hdr-online-list" class="hdr-online-list"></div>
-        </div>
-      </div>
     </div>
     <div id="hdr-turn" class="hdr-turn-idle">Sugaya...</div>
     <div class="header-right">
        <span class="bold header-score-value" id="hdr-score" aria-live="polite" title="Score-ka session-ka miiska hadda">Dhibco: 0</span>
-      <button id="btn-game-history" class="btn-history-icon" type="button" title="Fur taariikhda ciyaaraha" aria-label="Fur taariikhda ciyaaraha">🏆</button>
-      <button id="btn-exit" onclick="exitGame()">Ka bax</button>
+      <button id="btn-game-history" class="btn-history-icon" type="button" title="Fur taariikhda ciyaaraha" aria-label="Fur taariikhda ciyaaraha">Taariikh</button>
+      <button id="btn-exit" type="button" title="Ka bax ciyaarta" onclick="exitGame()">Ka bax</button>
     </div>
   </header>
 
@@ -175,6 +200,8 @@
         <button id="btn-dhigo" class="btn-green">Dhigo</button>
         <button id="btn-reset" class="btn-gray">Ka noqo</button>
         <button id="btn-sort" class="btn-blue">Sort</button>
+        <button id="btn-group-selected" class="btn-blue" type="button" title="Kaararka aad dooratay koox u samee">Kooxee</button>
+        <button id="btn-ungroup-selected" class="btn-gray" type="button" title="Kaararka aad dooratay kooxdooda ka saar">Ka saar koox</button>
         <button id="btn-tuur" class="btn-red">Tuur</button>
         <button id="btn-pause" class="btn-gray" style="display:none">Isuga</button>
         <button id="btn-force-reset" style="background:#7f1d1d;color:white;padding:6px 12px;border:none;border-radius:6px;font-weight:700;font-size:.85rem;cursor:pointer">Xalli Bug</button>
@@ -197,7 +224,7 @@
 
       <!-- Leaderboard -->
       <div id="modal-leaderboard-wrap" class="modal-leaderboard-wrap hidden">
-        <div class="modal-lb-title">🏆 Jadwalka Dhibcaha Xilliga</div>
+        <div class="modal-lb-title">Jadwalka Dhibcaha Xilliga</div>
         <div id="modal-leaderboard" class="modal-lb-body"></div>
       </div>
 
@@ -212,7 +239,7 @@
 <!-- Season End Modal -->
 <div id="season-modal" class="modal-overlay hidden">
   <div class="modal-box">
-    <div class="modal-icon">🏁</div>
+    <div class="modal-icon">101</div>
     <h2 class="modal-title" style="color:#e74c3c">XILLIGU WAA DHAMMADAY!</h2>
     <p id="season-modal-body" class="modal-body"></p>
     <div id="season-final-scores" class="fooro-list" style="margin:12px 0;width:100%"></div>
@@ -222,7 +249,7 @@
 
 <div id="reconnect-overlay" class="modal-overlay hidden">
   <div class="modal-box">
-    <div class="modal-icon">📡</div>
+    <div class="modal-icon">Xiriir</div>
     <h2 class="modal-title" style="color:#e74c3c">Xiriir La'aan</h2>
     <p id="reconnect-msg" class="modal-body">Dib u xidh...</p>
   </div>
@@ -232,7 +259,7 @@
 <div id="winner-history-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="winner-history-title">
   <div class="modal-box winner-history-modal-box">
     <div class="winner-history-modal-top">
-      <h2 id="winner-history-title">🏆 Taariikhda Ciyaaraha</h2>
+      <h2 id="winner-history-title">Taariikhda Ciyaaraha</h2>
       <button id="btn-close-winner-history" class="winner-history-close" type="button" aria-label="Xir taariikhda ciyaaraha">×</button>
     </div>
     <section id="winner-history-panel" class="winner-history-panel">
@@ -257,15 +284,47 @@
   </div>
 </div>
 
+<div id="game-invite-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="game-invite-title">
+  <div class="modal-box game-invite-box">
+    <span class="invite-modal-kicker">CASUUMAD CUSUB</span>
+    <h2 id="game-invite-title" class="modal-title">Ciyaar ayaa lagugu casuumay</h2>
+    <p id="game-invite-message" class="modal-body"></p>
+    <div class="game-invite-actions">
+      <button id="btn-decline-game-invite" class="invite-decline" type="button">Diid</button>
+      <button id="btn-accept-game-invite" class="invite-accept" type="button">Aqbal oo ciyaar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shared live presence control: available in the lobby and over the game table. -->
+<div id="hdr-online-users" class="hdr-online-users">
+  <button id="hdr-online-toggle" class="hdr-online-toggle" type="button" aria-expanded="false" aria-controls="hdr-online-popover">
+    <span class="online-dot">●</span>
+    <span id="hdr-online-count">0 online</span>
+  </button>
+  <div id="hdr-online-popover" class="hdr-online-popover hidden">
+    <div class="hdr-online-title">
+      <span>Dadka toos ugu jira</span>
+      <span id="hdr-online-total">0</span>
+    </div>
+    <div id="hdr-online-list" class="hdr-online-list"></div>
+  </div>
+</div>
+
 <!-- ─── SCRIPTS ────────────────────────────────────────────────────────── -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="/script.js"></script>
+<script src="/script.js?v=20261011-card-groups"></script>
 <script>
 function exitGame() {
   window.t101SkipResumeSave = true;
-  if (typeof socket !== 'undefined' && socket) socket.emit('leaveGame');
-  sessionStorage.removeItem('t101_token');
-  location.reload();
+  if (typeof clearPendingResume === 'function') clearPendingResume();
+  try { sessionStorage.removeItem('t101_token'); } catch (e) {}
+  if (typeof socket !== 'undefined' && socket && socket.connected) {
+    socket.emit('leaveGame');
+    setTimeout(() => location.reload(), 150);
+  } else {
+    location.reload();
+  }
 }
 </script>
 
