@@ -4233,23 +4233,6 @@ io.on('connection', socket => {
     if (p.hand.length === 0) { endGame(myRoomId, p); return; }
 });
 
-  socket.on('rotateOpenedCard', data => {
-    const room = rooms[myRoomId];
-    if (!room || !room.gameStarted) return;
-    const player = room.players.find(candidate => candidate.id === socket.id);
-    if (!player?.isOpened) return;
-
-    const cardId = String(data?.cardId ?? '');
-    if (!cardId) return;
-    const card = (player.openedSets || [])
-      .flat()
-      .find(openedCard => String(openedCard?.id) === cardId);
-    if (!card) return;
-
-    card.rotation = Number(card.rotation) === 90 ? 0 : 90;
-    broadcastTableUI(myRoomId);
-  });
-
   socket.on('addToExistingSets', (data) => {
     const room = rooms[myRoomId]; if (!room || !room.gameStarted) return;
     const p = room.players.find(pl => pl.id === socket.id); if (!p || !p.isOpened) return;

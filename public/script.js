@@ -22,7 +22,6 @@ let turnTimeLeft = 30;
 let turnTimerInterval = null;
 let lastTurnStartTime = 0;
 let dragStartIndex = null;
-let handGroups = [];
 let waitingAutoTimer = null;
 let waitingCountdown = 10;
 let inGame = false;
@@ -1097,8 +1096,6 @@ function makeCard(card, size, opts = {}) {
     (isRed ? ' red-suit' : ' black-suit') +
     (isFromDiscard ? ' badda-card' : '');
 
-  if (opts.rotated) el.classList.add('rotated');
-
   const cv = document.createElement('div');
   cv.className = 'cv';
   cv.textContent = card.value;
@@ -1120,21 +1117,6 @@ function makeCard(card, size, opts = {}) {
     badge.className = 'discard-badge';
     badge.textContent = '★';
     el.appendChild(badge);
-  }
-
-  if (typeof opts.onRotate === 'function') {
-    const rotateButton = document.createElement('button');
-    rotateButton.type = 'button';
-    rotateButton.className = 'card-rotate-button';
-    rotateButton.textContent = '↻';
-    rotateButton.title = `Jeedi kaarka ${card.value}${card.suit}`;
-    rotateButton.setAttribute('aria-label', `Jeedi kaarka ${card.value}${card.suit}`);
-    rotateButton.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      opts.onRotate();
-    });
-    el.appendChild(rotateButton);
   }
   return el;
 }
@@ -1270,11 +1252,9 @@ function renderHand() {
   const container = $('hand-cards');
   if (!container) return;
   container.innerHTML = '';
-  pruneHandGroups();
-  const appendHandCard = (card, idx, parent = container) => {
+  myHand.forEach((card, idx) => {
     const el = makeCard(card, 'md', { selected: card.selected });
     el.dataset.cardId = String(card.id ?? '');
-    el.dataset.handIndex = String(idx);
     if (card.fromDiscard) {
       el.style.border = '3px solid #ffcc00';
       el.style.boxShadow = '0 0 12px #ffcc00';
@@ -1294,37 +1274,8 @@ function renderHand() {
     });
     el.addEventListener('dragover', e => e.preventDefault());
     el.addEventListener('drop', () => handleDrop(idx));
-    parent.appendChild(el);
-  };
-
-  const renderedIds = new Set();
-  handGroups.forEach((group, groupIndex) => {
-    const cards = myHand
-      .map((card, idx) => ({ card, idx }))
-      .filter(({ card }) => group.includes(String(card.id)));
-    if (cards.length < 2) return;
-
-    const groupEl = document.createElement('div');
-    groupEl.className = 'hand-card-group';
-    groupEl.dataset.groupIndex = String(groupIndex + 1);
-    groupEl.setAttribute('aria-label', `Kooxda ${groupIndex + 1}`);
-    cards.forEach(({ card, idx }) => {
-      renderedIds.add(String(card.id));
-      appendHandCard(card, idx, groupEl);
-    });
-    container.appendChild(groupEl);
+    container.appendChild(el);
   });
-
-  myHand.forEach((card, idx) => {
-    if (!renderedIds.has(String(card.id))) appendHandCard(card, idx);
-  });
-
-  const selectedCount = myHand.filter(card => card.selected).length;
-  const groupButton = $('btn-group-selected');
-  const ungroupButton = $('btn-ungroup-selected');
-  if (groupButton) groupButton.disabled = selectedCount < 2;
-  if (ungroupButton) ungroupButton.disabled = selectedCount === 0 ||
-    !handGroups.some(group => group.some(id => myHand.some(card => card.selected && String(card.id) === id)));
 
   const selScore = myHand.filter(c => c.selected).reduce((s, c) => s + cardPoints(c), 0);
   const selScoreEl = $('sel-score');
@@ -1369,14 +1320,7 @@ function makeDraggableSet(set, setIdx, targetPlayerId) {
   setDiv.className = 'opened-set';
   if (set && Array.isArray(set)) {
     sortMeldCards(set).forEach((card, ci) => {
-      if (!card) return;
-      setDiv.appendChild(makeCard(card, 'sm', {
-        overlap: ci > 0,
-        rotated: Number(card.rotation) === 90,
-        onRotate: targetPlayerId === socket?.id
-          ? () => rotateOpenedCard(card.id)
-          : undefined,
-      }));
+      if (card) setDiv.appendChild(makeCard(card, 'sm', { overlap: ci > 0 }));
     });
   }
   setDiv.addEventListener('dragover', (e) => {
@@ -1601,47 +1545,6 @@ function handleSort() {
   });
   myHand = myHand.map(c => ({ ...c, selected: false }));
   renderHand();
-}
-
-function pruneHandGroups() {
-  const cardsInHand = new Set(myHand.map(card => String(card.id)));
-  handGroups = handGroups
-    .map(group => group.filter(id => cardsInHand.has(String(id))))
-    .filter(group => group.length > 1);
-}
-
-function groupSelectedCards() {
-  const selectedIds = myHand
-    .filter(card => card.selected)
-    .map(card => String(card.id));
-  if (selectedIds.length < 2) {
-    showNotification('Dooro ugu yaraan laba kaar si aad koox ugu samayso.');
-    return;
-  }
-
-  const selected = new Set(selectedIds);
-  handGroups = handGroups
-    .map(group => group.filter(id => !selected.has(String(id))))
-    .filter(group => group.length > 1);
-  handGroups.push(selectedIds);
-  renderHand();
-  showNotification('Kaararkii la doortay koox ayay noqdeen.', 1600);
-}
-
-function ungroupSelectedCards() {
-  const selectedIds = new Set(
-    myHand.filter(card => card.selected).map(card => String(card.id))
-  );
-  if (!selectedIds.size) return;
-  handGroups = handGroups
-    .map(group => group.filter(id => !selectedIds.has(String(id))))
-    .filter(group => group.length > 1);
-  renderHand();
-}
-
-function rotateOpenedCard(cardId) {
-  if (!socket || cardId === undefined || cardId === null) return;
-  socket.emit('rotateOpenedCard', { cardId: String(cardId) });
 }
 
 function handleDraw() {
@@ -2939,7 +2842,6 @@ function handleGameOverData(resultsFromBackendOrLogic) {
     inGame = true;
     isMyTurn = false;
     currentTurnId = null;
-    handGroups = [];
     myHand = hand.map(c => ({ ...c, selected: false, fromDiscard: false }));
     lastPickedDiscardId = null;
     lastDrawnCardId = null;
@@ -3912,10 +3814,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnReset) btnReset.addEventListener('click', handleReset);
   const btnSort = $('btn-sort');
   if (btnSort) btnSort.addEventListener('click', handleSort);
-  const btnGroupSelected = $('btn-group-selected');
-  if (btnGroupSelected) btnGroupSelected.addEventListener('click', groupSelectedCards);
-  const btnUngroupSelected = $('btn-ungroup-selected');
-  if (btnUngroupSelected) btnUngroupSelected.addEventListener('click', ungroupSelectedCards);
   const btnTuur = $('btn-tuur');
   if (btnTuur) btnTuur.addEventListener('click', handleTuur);
 
