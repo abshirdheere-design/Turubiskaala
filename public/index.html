@@ -87,6 +87,17 @@
           <button id="btn-auth-login" class="btn-auth" type="button" onclick="handleAuthSubmit('login')">Gal</button>
           <button id="btn-auth-register" class="btn-auth btn-auth-alt" type="button" style="display:none" onclick="handleAuthSubmit('register')">Diiwaangeli</button>
         </div>
+
+        <!-- 🔹 PULSANTE FACEBOOK AGGIUNTO QUI 🔹 -->
+        <div class="auth-row" style="margin-top: 10px; justify-content: center;">
+          <a href="/api/auth/facebook" class="btn-facebook">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="#ffffff" style="margin-right: 8px;">
+              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+            </svg>
+            Ku gal Facebook
+          </a>
+        </div>
+
         <div class="auth-meta">
           <span id="auth-mode-label" class="auth-mode-label">Gal</span>
           <span> · </span>
@@ -328,8 +339,27 @@ function exitGame() {
 }
 </script>
 
-<!-- CSS Styles for Matchmaking Pool Animation -->
+<!-- CSS Styles for Matchmaking Pool Animation & Facebook Button -->
 <style>
+.btn-facebook {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #1877f2;
+  color: #ffffff;
+  padding: 8px 16px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: bold;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: background-color 0.2s, transform 0.1s;
+}
+.btn-facebook:hover {
+  background-color: #166fe5;
+  transform: translateY(-1px);
+}
+
 .pool-animation-container {
   position: relative;
   width: 90px;
