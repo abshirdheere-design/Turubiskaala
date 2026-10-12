@@ -11,6 +11,17 @@ import { explainGameOver } from './gameover-explanation-engine.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const AUTH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const FACEBOOK_APP_ID = String(process.env.FACEBOOK_APP_ID || '3633491460150886').trim();
+const FACEBOOK_APP_SECRET = String(process.env.FACEBOOK_APP_SECRET || '').trim();
+const FACEBOOK_CALLBACK_URL = String(
+  process.env.FACEBOOK_CALLBACK_URL ||
+  'https://turubiskaala.onrender.com/api/auth/facebook/callback'
+).trim();
+const FACEBOOK_GRAPH_VERSION = String(process.env.FACEBOOK_GRAPH_VERSION || 'v26.0').trim();
+const FACEBOOK_OAUTH_TTL_MS = 10 * 60 * 1000;
+const FACEBOOK_EXCHANGE_TTL_MS = 2 * 60 * 1000;
+const facebookOAuthStates = new Map();
+const facebookAuthExchanges = new Map();
 
 function hasIndexFile(directory) {
   try {
@@ -255,6 +266,153 @@ const httpServer = createServer((req, res) => {
     res.writeHead(204, apiHeaders); res.end(); return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/auth/facebook') {
+    if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET || !FACEBOOK_CALLBACK_URL) {
+      res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Facebook login lama habayn. Ku dar FACEBOOK_APP_SECRET iyo Facebook App settings.');
+      return;
+    }
+
+    const now = Date.now();
+    for (const [state, expiresAt] of facebookOAuthStates) {
+      if (expiresAt <= now) facebookOAuthStates.delete(state);
+    }
+    const state = randomBytes(32).toString('base64url');
+    facebookOAuthStates.set(state, now + FACEBOOK_OAUTH_TTL_MS);
+
+    const facebookUrl = new URL(`https://www.facebook.com/${FACEBOOK_GRAPH_VERSION}/dialog/oauth`);
+    facebookUrl.searchParams.set('client_id', FACEBOOK_APP_ID);
+    facebookUrl.searchParams.set('redirect_uri', FACEBOOK_CALLBACK_URL);
+    facebookUrl.searchParams.set('scope', 'email,public_profile');
+    facebookUrl.searchParams.set('response_type', 'code');
+    facebookUrl.searchParams.set('state', state);
+    res.writeHead(302, { Location: facebookUrl.toString(), 'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/auth/facebook/callback') {
+    const state = requestUrl.searchParams.get('state') || '';
+    const stateExpiresAt = facebookOAuthStates.get(state);
+    facebookOAuthStates.delete(state);
+    if (!stateExpiresAt || stateExpiresAt <= Date.now()) {
+      res.writeHead(302, { Location: '/?facebook=state_error', 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+
+    const authorizationCode = requestUrl.searchParams.get('code');
+    if (!authorizationCode || requestUrl.searchParams.has('error')) {
+      res.writeHead(302, { Location: '/?facebook=cancelled', 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+    if (!FACEBOOK_APP_SECRET) {
+      res.writeHead(302, { Location: '/?facebook=not_configured', 'Cache-Control': 'no-store' });
+      res.end();
+      return;
+    }
+
+    (async () => {
+      try {
+        const tokenUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/oauth/access_token`);
+        tokenUrl.searchParams.set('client_id', FACEBOOK_APP_ID);
+        tokenUrl.searchParams.set('client_secret', FACEBOOK_APP_SECRET);
+        tokenUrl.searchParams.set('redirect_uri', FACEBOOK_CALLBACK_URL);
+        tokenUrl.searchParams.set('code', authorizationCode);
+        const tokenResponse = await fetch(tokenUrl);
+        const tokenData = await tokenResponse.json();
+        if (!tokenResponse.ok || !tokenData?.access_token) {
+          throw new Error(tokenData?.error?.message || 'Facebook token exchange failed');
+        }
+
+        const profileUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
+        profileUrl.searchParams.set('fields', 'id,name');
+        profileUrl.searchParams.set('access_token', tokenData.access_token);
+        const profileResponse = await fetch(profileUrl);
+        const facebookProfile = await profileResponse.json();
+        if (!profileResponse.ok || !facebookProfile?.id || !facebookProfile?.name) {
+          throw new Error(facebookProfile?.error?.message || 'Facebook profile lookup failed');
+        }
+
+        const linkedProfile = [...playerProfiles.values()].find(
+          profile => profile.facebookId === String(facebookProfile.id)
+        );
+        let gameProfile = linkedProfile;
+        if (!gameProfile) {
+          const baseName = String(facebookProfile.name).trim().replace(/\s+/g, ' ').slice(0, 15) || 'Facebook';
+          let candidate = baseName;
+          let suffix = 2;
+          while (getProfile(candidate)) {
+            const suffixText = ` ${suffix++}`;
+            candidate = `${baseName.slice(0, 15 - suffixText.length)}${suffixText}`;
+          }
+          gameProfile = createProfile(candidate, '', String(facebookProfile.id));
+        }
+
+        const exchangeCode = randomBytes(32).toString('base64url');
+        const now = Date.now();
+        for (const [code, exchange] of facebookAuthExchanges) {
+          if (exchange.expiresAt <= now) facebookAuthExchanges.delete(code);
+        }
+        facebookAuthExchanges.set(exchangeCode, {
+          expiresAt: now + FACEBOOK_EXCHANGE_TTL_MS,
+          profileName: gameProfile.name,
+        });
+        res.writeHead(302, {
+          Location: `/?facebook_code=${encodeURIComponent(exchangeCode)}`,
+          'Cache-Control': 'no-store',
+        });
+        res.end();
+      } catch (error) {
+        console.error('Facebook auth error:', error.message || error);
+        if (!res.headersSent) {
+          res.writeHead(302, { Location: '/?facebook=failed', 'Cache-Control': 'no-store' });
+          res.end();
+        }
+      }
+    })();
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/auth/facebook/exchange') {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 10_000) req.destroy();
+    });
+    req.on('end', () => {
+      try {
+        const { code } = JSON.parse(body || '{}');
+        const exchangeCode = String(code || '');
+        const exchange = facebookAuthExchanges.get(exchangeCode);
+        facebookAuthExchanges.delete(exchangeCode);
+        if (!exchange || exchange.expiresAt <= Date.now()) {
+          res.writeHead(401, apiHeaders);
+          res.end(JSON.stringify({ ok: false, error: 'Facebook login-ku wuu dhacay; mar kale isku day.' }));
+          return;
+        }
+        const profile = getProfile(exchange.profileName);
+        if (!profile?.facebookId) {
+          res.writeHead(401, apiHeaders);
+          res.end(JSON.stringify({ ok: false, error: 'Akoonka Facebook lama helin; mar kale isku day.' }));
+          return;
+        }
+        res.writeHead(200, { ...apiHeaders, 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          ok: true,
+          profile: publicProfile(profile),
+          authToken: createProfileAuthToken(profile),
+        }));
+      } catch {
+        if (res.headersSent || res.writableEnded) return;
+        res.writeHead(400, apiHeaders);
+        res.end(JSON.stringify({ ok: false, error: 'Codsiga Facebook login-ka lama fahmin.' }));
+      }
+    });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/auth/register') {
     let body = '';
     req.on('data', d => { body += d; });
@@ -411,6 +569,7 @@ const playerProfiles = new Map(
     const cleanProfile = {
       name: profile?.name || key,
       pin: String(profile?.pin || ''),
+      ...(profile?.facebookId ? { facebookId: String(profile.facebookId) } : {}),
       score: Number(profile?.score) || 0,
       wins: Math.max(0, Number(profile?.wins) || 0),
       fooros: Math.max(0, Number(profile?.fooros) || 0),
@@ -432,10 +591,18 @@ function getProfile(name) {
   return playerProfiles.get(profileKey(name));
 }
 
-function createProfile(name, pin) {
+function createProfile(name, pin, facebookId = null) {
   const key = profileKey(name);
   if (playerProfiles.has(key)) return null;
-  const profile = { name: name.trim(), pin: String(pin), score: 0, wins: 0, fooros: 0, games: 0 };
+  const profile = {
+    name: name.trim(),
+    pin: String(pin),
+    ...(facebookId ? { facebookId: String(facebookId) } : {}),
+    score: 0,
+    wins: 0,
+    fooros: 0,
+    games: 0,
+  };
   playerProfiles.set(key, profile);
   globalProfiles[key] = profile;
   saveProfilesData();

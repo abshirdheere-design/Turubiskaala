@@ -1987,6 +1987,39 @@ function restoreSavedProfile() {
   } catch (e) {}
 }
 
+async function completeFacebookLoginFromRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const exchangeCode = params.get('facebook_code');
+  const facebookStatus = params.get('facebook');
+  if (!exchangeCode && !facebookStatus) return;
+
+  // Ka saar code-ka hal-mar ah URL-ka ka hor inta aan wax kale la sugin.
+  window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  const errEl = $('auth-error');
+
+  if (facebookStatus) {
+    const messages = {
+      cancelled: 'Facebook login-ka waa la joojiyay.',
+      state_error: 'Codsiga Facebook login-ka ma ansaxin. Mar kale isku day.',
+      not_configured: 'Facebook login-ka server-ka weli lama habayn.',
+      failed: 'Facebook login-ku wuu fashilmay. Mar kale isku day.',
+    };
+    if (errEl) errEl.textContent = messages[facebookStatus] || messages.failed;
+    return;
+  }
+
+  if (errEl) errEl.textContent = 'Facebook ayaa xaqiijinaya akoonka...';
+  const result = await authPost('/api/auth/facebook/exchange', { code: exchangeCode });
+  if (!result.ok || !result.profile || !result.authToken) {
+    if (errEl) errEl.textContent = result.error || 'Facebook login-ku wuu fashilmay. Mar kale isku day.';
+    return;
+  }
+
+  setLoggedIn(result.profile, result.authToken);
+  if (errEl) errEl.textContent = '';
+  showNotification(`✅ Soo dhowow ${result.profile.name}`, 4000);
+}
+
 function renderAuthStatus() {
   const statusEl = $('auth-status');
   const loginArea = $('auth-login-area');
@@ -3712,6 +3745,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   loadSessionScores();
   restoreSavedProfile();
+  completeFacebookLoginFromRedirect();
   updateGameNamePreview();
   const _tl = $('fooro-target-label');
   if (_tl) _tl.textContent = `${xiiliTarget} Fooro`;
