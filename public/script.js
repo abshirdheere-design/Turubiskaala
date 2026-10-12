@@ -1991,10 +1991,25 @@ async function completeFacebookLoginFromRedirect() {
   const params = new URLSearchParams(window.location.search);
   const exchangeCode = params.get('facebook_code');
   const facebookStatus = params.get('facebook');
-  if (!exchangeCode && !facebookStatus) return;
+  const hasFacebookHashMarker = window.location.hash === '#_=_';
+
+  if (!exchangeCode && !facebookStatus) {
+    if (hasFacebookHashMarker) {
+      // Facebook mararka qaar wuxuu URL-ka ku daraa #_=_; hash-ku token ma
+      // aha, server-kuna ma arko. Nadiifi oo sheeg haddii code-ku uusan imaan.
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+      if (!myProfileData) {
+        const errEl = $('auth-error');
+        if (errEl) errEl.textContent =
+          'Facebook login-ku kuma soo celin code-ka app-ka. Hubi in server.js iyo script.js cusub la deploy-gareeyay.';
+      }
+    }
+    return;
+  }
 
   // Ka saar code-ka hal-mar ah URL-ka ka hor inta aan wax kale la sugin.
-  window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  const safeHash = hasFacebookHashMarker ? '' : window.location.hash;
+  window.history.replaceState({}, document.title, window.location.pathname + safeHash);
   const errEl = $('auth-error');
 
   if (facebookStatus) {
