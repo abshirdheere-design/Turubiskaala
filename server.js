@@ -21,6 +21,7 @@ const FACEBOOK_GRAPH_VERSION = String(process.env.FACEBOOK_GRAPH_VERSION || 'v26
 const FACEBOOK_OAUTH_TTL_MS = 10 * 60 * 1000;
 const FACEBOOK_EXCHANGE_TTL_MS = 2 * 60 * 1000;
 const facebookOAuthStates = new Map();
+const facebookAuthCallbackResults = new Map();
 const facebookAuthExchanges = new Map();
 
 function hasIndexFile(directory) {
@@ -279,6 +280,9 @@ const httpServer = createServer((req, res) => {
     for (const [state, expiresAt] of facebookOAuthStates) {
       if (expiresAt <= now) facebookOAuthStates.delete(state);
     }
+    for (const [state, result] of facebookAuthCallbackResults) {
+      if (result.expiresAt <= now) facebookAuthCallbackResults.delete(state);
+    }
     const state = randomBytes(32).toString('base64url');
     facebookOAuthStates.set(state, now + FACEBOOK_OAUTH_TTL_MS);
 
@@ -301,28 +305,51 @@ const httpServer = createServer((req, res) => {
       `[Facebook OAuth] callback received (state=${Boolean(state)}, code=${Boolean(authorizationCode)}, providerError=${hasProviderError})`
     );
     const stateExpiresAt = facebookOAuthStates.get(state);
-    facebookOAuthStates.delete(state);
+    const priorResult = facebookAuthCallbackResults.get(state);
     if (!stateExpiresAt || stateExpiresAt <= Date.now()) {
+      if (priorResult && priorResult.expiresAt > Date.now()) {
+        console.log('[Facebook OAuth] duplicate callback; reusing its result');
+        const sendRedirect = location => {
+          if (res.headersSent || res.writableEnded) return;
+          res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
+          res.end();
+        };
+        if (priorResult.location) sendRedirect(priorResult.location);
+        else priorResult.promise.then(sendRedirect);
+        return;
+      }
       console.error('[Facebook OAuth] state missing, expired, or not found in this server process');
       res.writeHead(302, { Location: '/?facebook=state_error', 'Cache-Control': 'no-store' });
       res.end();
       return;
     }
 
+    facebookOAuthStates.delete(state);
+    const callbackResult = {
+      expiresAt: Date.now() + FACEBOOK_OAUTH_TTL_MS,
+      location: null,
+      promise: null,
+    };
+    facebookAuthCallbackResults.set(state, callbackResult);
+    const sendCallbackRedirect = location => {
+      callbackResult.location = location;
+      if (res.headersSent || res.writableEnded) return;
+      res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
+      res.end();
+    };
+
     if (!authorizationCode || hasProviderError) {
       console.error('[Facebook OAuth] Facebook did not return an authorization code');
-      res.writeHead(302, { Location: '/?facebook=cancelled', 'Cache-Control': 'no-store' });
-      res.end();
+      sendCallbackRedirect('/?facebook=cancelled');
       return;
     }
     if (!FACEBOOK_APP_SECRET) {
       console.error('[Facebook OAuth] FACEBOOK_APP_SECRET is empty at callback');
-      res.writeHead(302, { Location: '/?facebook=not_configured', 'Cache-Control': 'no-store' });
-      res.end();
+      sendCallbackRedirect('/?facebook=not_configured');
       return;
     }
 
-    (async () => {
+    callbackResult.promise = (async () => {
       try {
         const tokenUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/oauth/access_token`);
         tokenUrl.searchParams.set('client_id', FACEBOOK_APP_ID);
@@ -373,19 +400,13 @@ const httpServer = createServer((req, res) => {
           profileName: gameProfile.name,
         });
         console.log('[Facebook OAuth] returning one-time exchange code to the browser');
-        res.writeHead(302, {
-          Location: `/?facebook_code=${encodeURIComponent(exchangeCode)}`,
-          'Cache-Control': 'no-store',
-        });
-        res.end();
+        return `/?facebook_code=${encodeURIComponent(exchangeCode)}`;
       } catch (error) {
         console.error('Facebook auth error:', error.message || error);
-        if (!res.headersSent) {
-          res.writeHead(302, { Location: '/?facebook=failed', 'Cache-Control': 'no-store' });
-          res.end();
-        }
+        return '/?facebook=failed';
       }
     })();
+    callbackResult.promise.then(sendCallbackRedirect);
     return;
   }
 
