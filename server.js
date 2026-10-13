@@ -267,7 +267,9 @@ const httpServer = createServer((req, res) => {
   }
 
   if (req.method === 'GET' && pathname === '/api/auth/facebook') {
+    console.log('[Facebook OAuth] authorization start received');
     if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET || !FACEBOOK_CALLBACK_URL) {
+      console.error('[Facebook OAuth] configuration missing: FACEBOOK_APP_ID, FACEBOOK_APP_SECRET, or FACEBOOK_CALLBACK_URL');
       res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Facebook login lama habayn. Ku dar FACEBOOK_APP_SECRET iyo Facebook App settings.');
       return;
@@ -293,21 +295,28 @@ const httpServer = createServer((req, res) => {
 
   if (req.method === 'GET' && pathname === '/api/auth/facebook/callback') {
     const state = requestUrl.searchParams.get('state') || '';
+    const authorizationCode = requestUrl.searchParams.get('code');
+    const hasProviderError = requestUrl.searchParams.has('error');
+    console.log(
+      `[Facebook OAuth] callback received (state=${Boolean(state)}, code=${Boolean(authorizationCode)}, providerError=${hasProviderError})`
+    );
     const stateExpiresAt = facebookOAuthStates.get(state);
     facebookOAuthStates.delete(state);
     if (!stateExpiresAt || stateExpiresAt <= Date.now()) {
+      console.error('[Facebook OAuth] state missing, expired, or not found in this server process');
       res.writeHead(302, { Location: '/?facebook=state_error', 'Cache-Control': 'no-store' });
       res.end();
       return;
     }
 
-    const authorizationCode = requestUrl.searchParams.get('code');
-    if (!authorizationCode || requestUrl.searchParams.has('error')) {
+    if (!authorizationCode || hasProviderError) {
+      console.error('[Facebook OAuth] Facebook did not return an authorization code');
       res.writeHead(302, { Location: '/?facebook=cancelled', 'Cache-Control': 'no-store' });
       res.end();
       return;
     }
     if (!FACEBOOK_APP_SECRET) {
+      console.error('[Facebook OAuth] FACEBOOK_APP_SECRET is empty at callback');
       res.writeHead(302, { Location: '/?facebook=not_configured', 'Cache-Control': 'no-store' });
       res.end();
       return;
@@ -320,11 +329,13 @@ const httpServer = createServer((req, res) => {
         tokenUrl.searchParams.set('client_secret', FACEBOOK_APP_SECRET);
         tokenUrl.searchParams.set('redirect_uri', FACEBOOK_CALLBACK_URL);
         tokenUrl.searchParams.set('code', authorizationCode);
+        console.log('[Facebook OAuth] exchanging authorization code');
         const tokenResponse = await fetch(tokenUrl);
         const tokenData = await tokenResponse.json();
         if (!tokenResponse.ok || !tokenData?.access_token) {
           throw new Error(tokenData?.error?.message || 'Facebook token exchange failed');
         }
+        console.log('[Facebook OAuth] token exchange succeeded');
 
         const profileUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
         profileUrl.searchParams.set('fields', 'id,name');
@@ -334,6 +345,7 @@ const httpServer = createServer((req, res) => {
         if (!profileResponse.ok || !facebookProfile?.id || !facebookProfile?.name) {
           throw new Error(facebookProfile?.error?.message || 'Facebook profile lookup failed');
         }
+        console.log('[Facebook OAuth] profile lookup succeeded');
 
         const linkedProfile = [...playerProfiles.values()].find(
           profile => profile.facebookId === String(facebookProfile.id)
@@ -360,6 +372,7 @@ const httpServer = createServer((req, res) => {
           expiresAt: now + FACEBOOK_EXCHANGE_TTL_MS,
           profileName: gameProfile.name,
         });
+        console.log('[Facebook OAuth] returning one-time exchange code to the browser');
         res.writeHead(302, {
           Location: `/?facebook_code=${encodeURIComponent(exchangeCode)}`,
           'Cache-Control': 'no-store',
@@ -377,6 +390,7 @@ const httpServer = createServer((req, res) => {
   }
 
   if (req.method === 'POST' && pathname === '/api/auth/facebook/exchange') {
+    console.log('[Facebook OAuth] browser exchange request received');
     let body = '';
     req.on('data', chunk => {
       body += chunk;
@@ -389,12 +403,14 @@ const httpServer = createServer((req, res) => {
         const exchange = facebookAuthExchanges.get(exchangeCode);
         facebookAuthExchanges.delete(exchangeCode);
         if (!exchange || exchange.expiresAt <= Date.now()) {
+          console.error('[Facebook OAuth] browser exchange code missing, expired, or already used');
           res.writeHead(401, apiHeaders);
           res.end(JSON.stringify({ ok: false, error: 'Facebook login-ku wuu dhacay; mar kale isku day.' }));
           return;
         }
         const profile = getProfile(exchange.profileName);
         if (!profile?.facebookId) {
+          console.error('[Facebook OAuth] exchange profile missing or not linked to Facebook');
           res.writeHead(401, apiHeaders);
           res.end(JSON.stringify({ ok: false, error: 'Akoonka Facebook lama helin; mar kale isku day.' }));
           return;
@@ -405,6 +421,7 @@ const httpServer = createServer((req, res) => {
           profile: publicProfile(profile),
           authToken: createProfileAuthToken(profile),
         }));
+        console.log('[Facebook OAuth] app login completed');
       } catch {
         if (res.headersSent || res.writableEnded) return;
         res.writeHead(400, apiHeaders);
