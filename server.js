@@ -345,7 +345,8 @@ const httpServer = createServer((req, res) => {
           let suffix = 2;
           while (getProfile(candidate)) {
             const suffixText = ` ${suffix++}`;
-            candidate = `${baseName.slice(0, 15 - suffixText.length)}${suffixText}`;
+            const availableNameLength = Math.max(0, 15 - suffixText.length);
+            candidate = `${baseName.slice(0, availableNameLength)}${suffixText}`;
           }
           gameProfile = createProfile(candidate, '', String(facebookProfile.id));
         }

@@ -545,27 +545,79 @@
         }
       ],
       "roomId": "Room_4ohww5tc9"
+    },
+    {
+      "id": "game_1791896282637_ip3xvl",
+      "endedAt": "2026-10-13T12:58:02.636Z",
+      "winner": "Faarax",
+      "winnerId": "bot_0knldlu",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": false
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_mqpoemb5z"
+    },
+    {
+      "id": "game_1791896448831_2lcspi",
+      "endedAt": "2026-10-13T13:00:48.831Z",
+      "winner": "Abshir",
+      "winnerId": "4ZjU0KfcacHmfkJaAAAD",
+      "xiiliTarget": 5,
+      "players": [
+        {
+          "name": "Abshir",
+          "isBot": true
+        },
+        {
+          "name": "Jaamac",
+          "isBot": true
+        },
+        {
+          "name": "Jimcaale",
+          "isBot": true
+        },
+        {
+          "name": "Faarax",
+          "isBot": true
+        }
+      ],
+      "roomId": "Room_mqpoemb5z"
     }
   ],
   "players": {
     "ABSHIR": {
       "name": "Abshir",
-      "gamesPlayed": 19,
+      "gamesPlayed": 21,
       "isBot": true
     },
     "JAAMAC": {
       "name": "Jaamac",
-      "gamesPlayed": 21,
+      "gamesPlayed": 23,
       "isBot": true
     },
     "JIMCAALE": {
       "name": "Jimcaale",
-      "gamesPlayed": 21,
+      "gamesPlayed": 23,
       "isBot": true
     },
     "FAARAX": {
       "name": "Faarax",
-      "gamesPlayed": 21,
+      "gamesPlayed": 23,
       "isBot": true
     },
     "YASIR": {
