@@ -11,7 +11,7 @@ import { explainGameOver } from './gameover-explanation-engine.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const AUTH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const FACEBOOK_APP_ID = String(process.env.FACEBOOK_APP_ID || '1188813170468834').trim();
+const FACEBOOK_APP_ID = String(process.env.FACEBOOK_APP_ID || '1752774810183637').trim();
 const FACEBOOK_APP_SECRET = String(process.env.FACEBOOK_APP_SECRET || '').trim();
 const FACEBOOK_CALLBACK_URL = String(
   process.env.FACEBOOK_CALLBACK_URL ||
