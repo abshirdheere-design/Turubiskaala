@@ -2392,3 +2392,16 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
     font-size: inherit !important;
   }
 }
+
+/* MOBILE FIX v10 — inset side cards and opened sets so they don't sit under badges. */
+@media (max-width: 768px) {
+  #game-screen.active .slot-left .opponent-cards,
+  #game-screen.active .slot-left .opponent-table-sets {
+    transform: translateX(10px) !important;
+  }
+
+  #game-screen.active .slot-right .opponent-cards,
+  #game-screen.active .slot-right .opponent-table-sets {
+    transform: translateX(-10px) !important;
+  }
+}
