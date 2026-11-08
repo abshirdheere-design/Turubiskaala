@@ -2117,3 +2117,32 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   #game-screen.active .btn-group { min-width: 0 !important; }
   #game-screen.active .controls-row .score-info { flex: 0 0 66px !important; width: 66px !important; min-width: 0 !important; font-size: .5rem !important; line-height: 1.15 !important; white-space: normal !important; overflow: hidden !important; word-break: break-word !important; }
 }
+
+/* MOBILE FIX v4 - magacyada ciyaartoyda oo la akhriyi karo (sida PC) iyo turubka oo la weyneeyay */
+@media (max-width: 768px) {
+  /* Magaca sare */
+  #game-screen.active .slot-top .player-badge { font-size: .85rem !important; padding: 4px 12px !important; margin-bottom: 4px !important; }
+
+  /* Magacyada dhinacyada (bidix/midig): weyn oo la akhriyi karo */
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    font-size: .72rem !important; font-weight: 700 !important;
+    width: 26px !important; min-height: 90px !important; max-height: 150px !important;
+    padding: 10px 0 !important; text-overflow: ellipsis !important; line-height: 26px !important;
+  }
+  #game-screen.active .slot-left { left: 2px !important; }
+  #game-screen.active .slot-right { right: 2px !important; }
+
+  /* Magaca adiga */
+  #game-screen.active .my-name-badge { font-size: .85rem !important; padding: 4px 14px !important; }
+
+  /* Turubka (kaararka dhexda iyo miiska) oo la weyneeyay */
+  #game-screen.active .card-back-lg,
+  #game-screen.active .discard-empty,
+  #game-screen.active .piles-center .card.lg { width: 60px !important; height: 86px !important; }
+  #game-screen.active .player-sets .card,
+  #game-screen.active .player-set .card,
+  #game-screen.active .my-table-sets .card,
+  #game-screen.active .card.md,
+  #game-screen.active [class*="set"] .card { width: 34px !important; height: 49px !important; min-width: 34px !important; min-height: 49px !important; }
+}
