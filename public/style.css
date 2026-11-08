@@ -2123,16 +2123,6 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   /* Magaca sare */
   #game-screen.active .slot-top .player-badge { font-size: .85rem !important; padding: 4px 12px !important; margin-bottom: 4px !important; }
 
-  /* Magacyada dhinacyada (bidix/midig): weyn oo la akhriyi karo */
-  #game-screen.active .slot-left .player-badge,
-  #game-screen.active .slot-right .player-badge {
-    font-size: .72rem !important; font-weight: 700 !important;
-    width: 26px !important; min-height: 90px !important; max-height: 150px !important;
-    padding: 10px 0 !important; text-overflow: ellipsis !important; line-height: 26px !important;
-  }
-  #game-screen.active .slot-left { left: 2px !important; }
-  #game-screen.active .slot-right { right: 2px !important; }
-
   /* Magaca adiga */
   #game-screen.active .my-name-badge { font-size: .85rem !important; padding: 4px 14px !important; }
 
@@ -2145,4 +2135,27 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   #game-screen.active .my-table-sets .card,
   #game-screen.active .card.md,
   #game-screen.active [class*="set"] .card { width: 34px !important; height: 49px !important; min-width: 34px !important; min-height: 49px !important; }
+}
+
+/* MOBILE FIX v5 - magacyada bidix/midig oo horizontal ah (sida PC), kaararka dusha */
+@media (max-width: 768px) {
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    position: absolute !important; top: -27px !important;
+    width: auto !important; min-width: 0 !important; max-width: min(34vw, 132px) !important;
+    min-height: 0 !important; max-height: 26px !important; padding: 4px 8px !important; overflow: hidden !important;
+    writing-mode: horizontal-tb !important; text-orientation: mixed !important; transform: none !important;
+    font-size: clamp(.66rem, 2.8vw, .78rem) !important; line-height: 1.2 !important; text-align: center !important;
+    text-overflow: ellipsis !important; white-space: nowrap !important; border-radius: 999px !important;
+    background: rgba(8, 16, 20, .96) !important; z-index: 120 !important;
+  }
+  #game-screen.active .slot-left .player-badge { left: 0 !important; right: auto !important; }
+  #game-screen.active .slot-right .player-badge { right: 0 !important; left: auto !important; }
+  #game-screen.active .slot-top .player-badge { max-width: 58vw !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
+  #game-screen.active .my-name-badge { max-width: calc(100vw - 28px) !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
+}
+@media (max-width: 370px) {
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge { max-width: 31vw !important; padding: 3px 6px !important; font-size: .64rem !important; }
+  #game-screen.active .my-name-badge { font-size: .76rem !important; padding-inline: 9px !important; }
 }
