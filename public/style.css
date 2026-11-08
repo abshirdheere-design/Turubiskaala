@@ -2341,3 +2341,54 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
     left: auto !important;
   }
 }
+
+/* MOBILE FIX v9 — compact vertical name badges matching the supplied reference. */
+@media (max-width: 768px) {
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    position: absolute !important;
+    top: 50% !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    max-width: 22px !important;
+    height: 108px !important;
+    min-height: 82px !important;
+    max-height: min(22vh, 118px) !important;
+    padding: 7px 3px !important;
+    margin: 0 !important;
+    display: block !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    writing-mode: vertical-rl !important;
+    text-orientation: mixed !important;
+    transform: translateY(-50%) !important;
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    line-height: 1.1 !important;
+    letter-spacing: 0 !important;
+    white-space: nowrap !important;
+    text-align: center !important;
+    color: #f2d15b !important;
+    background: rgba(8, 17, 28, .97) !important;
+    border: 1px solid #d4a017 !important;
+    border-radius: 999px !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .55) !important;
+  }
+
+  #game-screen.active .slot-left .player-badge {
+    left: -17px !important;
+    right: auto !important;
+  }
+
+  #game-screen.active .slot-right .player-badge {
+    right: -17px !important;
+    left: auto !important;
+  }
+
+  #game-screen.active .slot-left .player-badge .player-score,
+  #game-screen.active .slot-right .player-badge .player-score {
+    margin: 0 !important;
+    color: #f2d15b !important;
+    font-size: inherit !important;
+  }
+}
