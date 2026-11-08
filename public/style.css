@@ -2064,7 +2064,7 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   #game-screen.active .card-back-sm,
   #game-screen.active .slot-top .card-back-sm,
   #game-screen.active .slot-left .card-back-sm,
-  #game-screen.active .slot-right .card-back-sm { width: 30px !important; height: 43px !important; min-width: 30px !important; min-height: 43px !important; max-width: 30px !important; max-height: 43px !important; }
+  #game-screen.active .slot-right .card-back-sm { width: 30px !important; height: 43px !important; min-width: 30px !important; min-height: 43px !important; max-width: 30px !important; }
 
   /* Kaararka dhexda (qaadasho/tuuris) */
   #game-screen.active .card-back-lg,
