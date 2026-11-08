@@ -2099,3 +2099,21 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   #game-screen.active #btn-force-reset { height: 38px !important; min-height: 38px !important; font-size: .72rem !important; padding: 3px !important; border-radius: 8px !important; }
   #game-screen.active .score-info { width: 64px !important; font-size: .6rem !important; }
 }
+
+/* MOBILE FIX v3 - header-ka iyo qoraalka dhibcaha oo aan go'in */
+@media (max-width: 768px) {
+  #game-screen.active #game-header { padding: 4px 6px !important; gap: 4px !important; overflow: hidden !important; }
+  #game-screen.active #game-header > * { min-width: 0 !important; }
+  #game-screen.active #hdr-name { font-size: .68rem !important; max-width: 56px !important; }
+  #game-screen.active #hdr-room-label,
+  #game-screen.active #hdr-opened-badge { font-size: .56rem !important; padding: 2px 5px !important; white-space: nowrap !important; }
+  #game-screen.active #hdr-turn { font-size: .6rem !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; min-width: 0 !important; }
+  #game-screen.active #hdr-score { font-size: .66rem !important; white-space: nowrap !important; }
+  #game-screen.active #btn-game-history,
+  #game-screen.active #btn-exit { font-size: .6rem !important; padding: 3px 5px !important; white-space: nowrap !important; }
+  #game-screen.active .hdr-online-toggle { font-size: .54rem !important; padding: 2px 4px !important; }
+
+  #game-screen.active .controls-row { gap: 3px !important; }
+  #game-screen.active .btn-group { min-width: 0 !important; }
+  #game-screen.active .controls-row .score-info { flex: 0 0 66px !important; width: 66px !important; min-width: 0 !important; font-size: .5rem !important; line-height: 1.15 !important; white-space: normal !important; overflow: hidden !important; word-break: break-word !important; }
+}
