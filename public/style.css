@@ -2196,6 +2196,7 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
 
   #game-screen.active .slot-left .player-badge,
   #game-screen.active .slot-right .player-badge {
+    display: block !important;
     top: 50% !important;
     width: 16px !important;
     min-width: 16px !important;
@@ -2210,6 +2211,7 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
     font-size: 9px !important;
     line-height: 1.05 !important;
     letter-spacing: 0 !important;
+    white-space: nowrap !important;
     color: #e22b2b !important;
     background: transparent !important;
     border: 0 !important;
@@ -2262,5 +2264,16 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
 
   #game-screen.active .hand-cards .card .cv-bot {
     font-size: 8px !important;
+  }
+}
+
+/* MOBILE FIX v7 — keep each side name and score in one vertical text flow. */
+@media (max-width: 768px) {
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    display: block !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-orientation: upright !important;
   }
 }
