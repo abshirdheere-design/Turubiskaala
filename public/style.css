@@ -2159,3 +2159,108 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
   #game-screen.active .slot-right .player-badge { max-width: 31vw !important; padding: 3px 6px !important; font-size: .64rem !important; }
   #game-screen.active .my-name-badge { font-size: .76rem !important; padding-inline: 9px !important; }
 }
+
+/* MOBILE FIX v6 — remove the oval table and use the full green play surface. */
+@media (max-width: 768px) {
+  #game-screen.active {
+    background: #087b35 !important;
+  }
+
+  #game-screen.active #table-area {
+    background: #087b35 !important;
+    padding-bottom: 0 !important;
+  }
+
+  #game-screen.active .felt-oval {
+    display: none !important;
+  }
+
+  #game-screen.active .piles-center {
+    top: 42% !important;
+  }
+
+  /* Match the reference layout: vertical player names beside the card stacks. */
+  #game-screen.active .slot-left,
+  #game-screen.active .slot-right {
+    top: 34% !important;
+    width: 30px !important;
+  }
+
+  #game-screen.active .slot-left {
+    left: 17px !important;
+  }
+
+  #game-screen.active .slot-right {
+    right: 17px !important;
+  }
+
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    top: 50% !important;
+    width: 16px !important;
+    min-width: 16px !important;
+    max-width: 16px !important;
+    min-height: 96px !important;
+    max-height: 144px !important;
+    padding: 4px 1px !important;
+    overflow: hidden !important;
+    writing-mode: vertical-rl !important;
+    text-orientation: upright !important;
+    transform: translateY(-50%) !important;
+    font-size: 9px !important;
+    line-height: 1.05 !important;
+    letter-spacing: 0 !important;
+    color: #e22b2b !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    text-align: center !important;
+  }
+
+  #game-screen.active .slot-left .player-badge {
+    left: -17px !important;
+    right: auto !important;
+  }
+
+  #game-screen.active .slot-right .player-badge {
+    right: -17px !important;
+    left: auto !important;
+  }
+
+  /* Fit a fuller hand across the phone, while allowing scroll for very large hands. */
+  #game-screen.active #hand-area {
+    height: calc(174px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  #game-screen.active .hand-cards {
+    justify-content: flex-start !important;
+    gap: 0 !important;
+    height: 64px !important;
+    min-height: 64px !important;
+    padding: 3px 2px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+
+  #game-screen.active .hand-cards .card,
+  #game-screen.active .hand-cards .card.md {
+    width: clamp(22px, 6.6vw, 28px) !important;
+    min-width: clamp(22px, 6.6vw, 28px) !important;
+    height: clamp(48px, 14.5vw, 58px) !important;
+    max-height: 58px !important;
+    margin-right: 0 !important;
+    border-radius: 4px !important;
+  }
+
+  #game-screen.active .hand-cards .card .cv {
+    font-size: 9px !important;
+  }
+
+  #game-screen.active .hand-cards .card .cs {
+    font-size: .78rem !important;
+  }
+
+  #game-screen.active .hand-cards .card .cv-bot {
+    font-size: 8px !important;
+  }
+}
