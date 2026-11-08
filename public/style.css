@@ -2277,3 +2277,67 @@ body:has(#setup-screen.active .auth-status .auth-logged-in) > #hdr-online-users 
     text-orientation: upright !important;
   }
 }
+
+/* MOBILE FIX v8 — upright side names beside the opponent card stacks,
+   sized to the actual name and kept clear of the player's hand below. */
+@media (max-width: 768px) {
+  #game-screen.active .slot-left,
+  #game-screen.active .slot-right {
+    top: 35% !important;
+    width: 28px !important;
+    transform: translateY(-50%) !important;
+    align-items: center !important;
+    overflow: visible !important;
+  }
+
+  #game-screen.active .slot-left {
+    left: 17px !important;
+    right: auto !important;
+  }
+
+  #game-screen.active .slot-right {
+    right: 17px !important;
+    left: auto !important;
+  }
+
+  #game-screen.active .slot-left .player-badge,
+  #game-screen.active .slot-right .player-badge {
+    position: absolute !important;
+    top: 50% !important;
+    width: 16px !important;
+    min-width: 16px !important;
+    max-width: 16px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: min(24vh, 180px) !important;
+    padding: 3px 1px !important;
+    margin: 0 !important;
+    display: block !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    writing-mode: vertical-rl !important;
+    text-orientation: upright !important;
+    transform: translateY(-50%) !important;
+    font-size: clamp(8px, 2.5vw, 10px) !important;
+    line-height: 1.15 !important;
+    letter-spacing: 0 !important;
+    white-space: nowrap !important;
+    text-align: center !important;
+    color: #e22b2b !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .9) !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #game-screen.active .slot-left .player-badge {
+    left: -17px !important;
+    right: auto !important;
+  }
+
+  #game-screen.active .slot-right .player-badge {
+    right: -17px !important;
+    left: auto !important;
+  }
+}
